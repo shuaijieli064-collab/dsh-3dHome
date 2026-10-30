@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { buildHome, CAMERA_PRESETS, ZONE_LABELS } from './scene/home.js';
+import { CHAR_PALETTES } from './scene/characters.js';
+import { createResident } from './agents/controller.js';
+import { createBubble } from './ui/bubble.js';
 import { createLabels } from './ui/labels.js';
 import { initHUD } from './ui/hud.js';
 import { connectBridge } from './bridge.js';
@@ -77,11 +80,97 @@ const labels = createLabels(
 );
 
 /* ------------------------------------------------------------------ */
+/*  住客：小拾（唯一模型，屋里的活人）                                   */
+/* ------------------------------------------------------------------ */
+
+const resident = createResident({
+  scene,
+  home,
+  zones: home.zones,
+  palette: CHAR_PALETTES.marvis,
+});
+
+// 障碍盒从已建好的房屋推导一次，据此剪掉穿模的走边。
+const navInfo = resident.deriveBlockers();
+window.__navInfo = navInfo;
+
+const bubble = createBubble({
+  container: document.getElementById('bubble-layer'),
+  camera,
+  occluders: home.occluders,
+  getAnchor: (out) => resident.getHeadPoint(out),
+  getState: () => resident.getState(),
+});
+
+// 小拾还没加载好之前，别让它挡住视线
+resident.loading.then((ok) => {
+  if (!ok) console.warn('[home] 小拾未就位（模型加载失败）');
+});
+
+// 点击聚焦用的隐形代理：真网格 91 万顶点，直接 raycast 每帧遍历三角形会卡，
+// 所以拿一个粗贴身的盒子代替（three 只在点击时测一次，盒子足够）。
+const hitProxy = new THREE.Mesh(
+  new THREE.BoxGeometry(0.75, 1.15, 0.75),
+  new THREE.MeshBasicMaterial({ visible: false })
+);
+hitProxy.name = 'resident-hit-proxy';
+scene.add(hitProxy);
+
+const pickRay = new THREE.Raycaster();
+const pickNdc = new THREE.Vector2();
+let downAt = null;
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  downAt = { x: e.clientX, y: e.clientY };
+});
+
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (!downAt) return;
+  // 拖过就算转镜头，不当作点击
+  const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
+  downAt = null;
+  if (moved > 5 || !resident.ready) return;
+
+  pickNdc.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
+  pickRay.setFromCamera(pickNdc, camera);
+  if (!pickRay.intersectObject(hitProxy, false).length) return;
+
+  resident.getBodyPoint(followPoint);
+  focusOn(followPoint);
+  followResident = true;
+});
+
+/** 拉近到某个世界点（不改预设态，只飞镜头）。 */
+function focusOn(point, distance = 2.6) {
+  const dir = new THREE.Vector3().subVectors(camera.position, point);
+  dir.y = Math.max(dir.y, 0.9);
+  dir.normalize().multiplyScalar(distance);
+  const toPos = new THREE.Vector3().addVectors(point, dir);
+
+  controls.minDistance = 1.2;
+  controls.maxDistance = 30;
+
+  flight = {
+    t: 0,
+    duration: 0.7,
+    fromPos: camera.position.clone(),
+    toPos,
+    fromTarget: controls.target.clone(),
+    toTarget: point.clone(),
+  };
+  controls.enabled = false;
+  controls.autoRotate = false;
+  hud.setPresetActive(null);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Camera flights                                                     */
 /* ------------------------------------------------------------------ */
 
 let flight = null;
 let autoRotateEnabled = false;
+let followResident = false;
+const followPoint = new THREE.Vector3();
 
 function easeInOutCubic(x) {
   return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
@@ -97,6 +186,10 @@ function applyPresetLimits(name) {
 function flyTo(name) {
   const preset = CAMERA_PRESETS[name];
   if (!preset) return;
+
+  // 主动切预设就退出跟随，否则镜头刚拉走又被跟回来，两边打架
+  followResident = false;
+  hud.setFollowActive(false);
 
   applyPresetLimits(name);
 
@@ -148,6 +241,12 @@ labelsBtn.addEventListener('click', () => {
   labels.setVisible(!labels.visible);
   hud.setLabelsActive(labels.visible);
 });
+
+const followBtn = document.getElementById('follow-btn');
+followBtn?.addEventListener('click', () => {
+  followResident = !followResident;
+  hud.setFollowActive(followResident);
+});
 hud.setLabelsActive(true);
 
 const PRESET_KEYS = ['overview', 'living', 'kitchen', 'study', 'workshop', 'loft', 'character'];
@@ -166,6 +265,10 @@ window.addEventListener('keydown', (e) => {
     autoRotateEnabled = !autoRotateEnabled;
     controls.autoRotate = autoRotateEnabled;
     hud.setRotateActive(autoRotateEnabled);
+  }
+  if (key === 'f') {
+    followResident = !followResident;
+    hud.setFollowActive?.(followResident);
   }
   if (key === 'l') {
     labels.setVisible(!labels.visible);
@@ -243,6 +346,9 @@ let demoIndex = 0;
 
 function applyEvent(ev) {
   if (!ev || !ev.type) return;
+
+  // 住客先拿事件：它自己区分 snapshot / agent.state / session.end
+  resident.onEvent(ev);
 
   if (ev.type === 'snapshot') {
     hud.applySnapshot(ev);
@@ -334,7 +440,21 @@ function animate() {
   const t = clock.elapsedTime;
 
   for (const update of home.updaters) update(t, dt);
+  resident.update(t, dt);
   updateDust(t);
+
+  if (resident.ready) {
+    resident.getBodyPoint(hitProxy.position);
+    hitProxy.visible = true;
+  } else {
+    hitProxy.visible = false;
+  }
+
+  if (followResident) {
+    // 跟随：把轨道中心平滑挪到小拾身上，镜头本身不动，用户仍可自由旋转
+    resident.getBodyPoint(followPoint);
+    controls.target.lerp(followPoint, 1 - Math.pow(0.002, dt));
+  }
 
   if (flight) {
     flight.t += dt / flight.duration;
@@ -346,6 +466,7 @@ function animate() {
 
   controls.update();
   labels.update();
+  bubble.update();
   renderer.render(scene, camera);
 
   if (firstFrame) {
@@ -361,4 +482,18 @@ function animate() {
 
 animate();
 
-window.homeScene = { scene, camera, controls, home, hud, flyTo };
+window.homeScene = {
+  scene,
+  camera,
+  controls,
+  home,
+  hud,
+  flyTo,
+  resident,
+  bubble,
+  focusOn,
+  /** 调试：当前是否跟随小拾 */
+  get following() {
+    return followResident;
+  },
+};

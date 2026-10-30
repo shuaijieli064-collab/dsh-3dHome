@@ -85,7 +85,8 @@ export const CAMERA_PRESETS = {
   study: { pos: [1.8, 3.1, 7.6], target: [-4.5, 1.2, -2.4] },
   workshop: { pos: [-3.2, 5.8, 9.4], target: [-4.3, 0.95, 2.3] },
   loft: { pos: [4.6, 9.2, 6.4], target: [-3.7, 3.0, -2.4] },
-  character: { pos: [11.15, 1.35, 11.35], target: [11.8, 0.95, 4.65], near: 1.5, far: 26 },
+  // 小拾现在住在屋里，不再站屋外展示台：这里对准它的常驻落脚点（客厅）。
+  character: { pos: [4.9, 2.5, 3.4], target: [4.2, 0.95, -2.15], near: 1.2, far: 26 },
 };
 
 export const ZONE_LABELS = [
@@ -252,7 +253,7 @@ function buildWallGeometry(parent, wallMat) {
 /*  Main build                                                         */
 /* ------------------------------------------------------------------ */
 
-export function buildHome(scene, renderer) {
+export function buildHome(scene, renderer, opts = {}) {
   const group = new THREE.Group();
   scene.add(group);
 
@@ -763,11 +764,13 @@ export function buildHome(scene, renderer) {
 
   /* ---------------- character showcase stage ---------------- */
 
-  characterStage = buildCharacterStage(group, CHAR_PALETTES.marvis);
-
-  // 小拾只有模型化这一条路线：台子先空着，模型加载完再站上去。
-  // 注意 buildCharacterStage 返回 { stage, character } 包装，换模型要传 .stage。
-  loadModelIntoStage(characterStage.stage, CHAR_PALETTES.marvis);
+  // 屋外展示台已停用：小拾现在是屋里的住客，由 agents/controller.js 接管
+  // 位置与动作。buildCharacterStage 仍保留在 characters.js，demo.html 单独
+  // 用它做模型预览。
+  if (opts.stage) {
+    characterStage = buildCharacterStage(group, CHAR_PALETTES.marvis);
+    loadModelIntoStage(characterStage.stage, CHAR_PALETTES.marvis);
+  }
 
   const lamps = [];
   group.traverse((o) => {

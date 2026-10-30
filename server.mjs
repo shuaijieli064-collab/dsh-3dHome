@@ -222,7 +222,7 @@ const server = http.createServer(async (req, res) => {
 /* ------------------------------------------------------------------ */
 
 function runDemo() {
-  console.log('\n▶ 演示剧本开始（每轮约 20 秒）');
+  console.log('\n▶ 演示剧本开始（一轮约 1 分钟，按小拾真实走路节奏排）');
   for (const step of DEMO_SCRIPT) {
     setTimeout(() => {
       try {

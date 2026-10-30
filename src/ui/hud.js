@@ -177,6 +177,11 @@ export function initHUD() {
     labelsBtn.classList.toggle('is-active', on);
   }
 
+  function setFollowActive(on) {
+    const btn = document.getElementById('follow-btn');
+    if (btn) btn.classList.toggle('is-active', on);
+  }
+
   return {
     logEvent,
     setAgentState,
@@ -187,6 +192,7 @@ export function initHUD() {
     setPresetActive,
     setRotateActive,
     setLabelsActive,
+    setFollowActive,
     timeLabel: TIME_LABEL,
   };
 }
