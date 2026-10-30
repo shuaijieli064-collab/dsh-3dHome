@@ -87,7 +87,14 @@
       </div>
     </div>
 
-    <script type="module" src="./src/main.js"></script>
+    <!-- 入口脚本带版本串：改了代码重启后自动换 URL，绕开浏览器对 .js 的缓存 -->
+    <script type="module" id="entry"></script>
+    <script>
+      (function () {
+        var s = document.getElementById("entry");
+        s.src = "./src/main.js?v=" + (window.__HOME_BUILD__ || Date.now());
+      })();
+    </script>
     <script>
       window.setTimeout(function () {
         if (!window.__homeReady) {

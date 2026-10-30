@@ -281,13 +281,33 @@ async function buildScene(gltf, bin, opts) {
         const bones = (s.joints || []).map((i) => nodeObjs[i]).filter(Boolean);
         if (!bones.length) throw new Error('skin.joints 全部缺失');
         const inv = s.inverseBindMatrices != null ? readAccessor(s.inverseBindMatrices) : null;
-        const boneInverses = [];
+        const fromFile = [];
+        const fromRest = [];
+        let fileDev = 0;
         for (let i = 0; i < bones.length; i++) {
-          const m = new THREE.Matrix4();
+          const mf = new THREE.Matrix4();
           // glTF 矩阵是列主序，与 THREE.Matrix4 内部一致，可直接 fromArray
-          if (inv && inv.itemSize === 16) m.fromArray(inv.array, i * 16);
-          else m.copy(bones[i].matrixWorld).invert();
-          boneInverses.push(m);
+          if (inv && inv.itemSize === 16) mf.fromArray(inv.array, i * 16);
+          else mf.copy(bones[i].matrixWorld).invert();
+          fromFile.push(mf);
+          const mr = new THREE.Matrix4().copy(bones[i].matrixWorld).invert();
+          fromRest.push(mr);
+          // 文件里的 IBM 乘上静止世界矩阵应当≈单位阵；偏差大说明两边空间不一致
+          const chk = new THREE.Matrix4().copy(bones[i].matrixWorld).multiply(mf);
+          const e = chk.elements;
+          for (let k = 0; k < 16; k++) {
+            const d = Math.abs(e[k] - (k % 5 === 0 ? 1 : 0));
+            if (d > fileDev) fileDev = d;
+          }
+        }
+        // 用静止姿态自己算的 IBM：静止时 bone.matrixWorld · IBM 恒等于单位阵，
+        // 从数学上保证「不动画 = 与原始模型逐顶点一致」。
+        const boneInverses = fileDev > 1e-3 ? fromRest : fromFile;
+        if (fileDev > 1e-3) {
+          console.warn(
+            `[glb] 文件的 inverseBindMatrix 与本解析器节点空间不一致（最大偏差 ${fileDev.toFixed(4)}），` +
+              '改用静止姿态重算，保证静止零变形。'
+          );
         }
         const skeleton = new THREE.Skeleton(bones, boneInverses);
 

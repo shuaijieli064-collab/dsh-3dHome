@@ -7,6 +7,9 @@ import { DEMO_SCRIPT } from './src/data/demo.js';
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 5173);
 const DEMO = process.argv.includes('--demo');
+// 默认不缓存静态资源。本地开发时改一行 .js 就得能立刻看到效果；
+// 想开短缓存（部署用）设 HOME3D_CACHE=1。
+const DEV_NO_CACHE = !process.env.HOME3D_CACHE;
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -100,7 +103,14 @@ function serveStatic(res, filePath) {
       const ext = path.extname(filePath).toLowerCase();
       res.writeHead(200, {
         'Content-Type': MIME[ext] || 'application/octet-stream',
-        'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=60',
+        // 默认不缓存：源码 .js 改了必须立刻生效。否则改完名/改完样式，
+        // 面板里看到的还是上一次的内容——.js 曾被缓存 60 秒，坑就在这里。
+        // 设 HOME3D_CACHE=1 才允许短缓存（生产部署时用）。
+        'Cache-Control': DEV_NO_CACHE
+          ? 'no-store, must-revalidate'
+          : ext === '.html'
+            ? 'no-cache'
+            : 'public, max-age=60',
         ...CORS,
       });
       res.end(data);

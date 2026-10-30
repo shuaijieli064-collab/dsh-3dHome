@@ -213,6 +213,7 @@
           character.userData.animate(t);
           // 骨骼层：整体位移归控制器，这里只驱动四肢躯干
           character.userData.boneTick?.(t + window.__phase, dt, poseCtx);
+          if (window.__freeze) character.userData.animator?.reset();
           if (spin) character.rotation.y = Math.sin(t * 0.28) * 0.5;
           else character.rotation.y *= 0.9;
         }
