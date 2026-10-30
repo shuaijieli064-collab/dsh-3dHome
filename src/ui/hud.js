@@ -74,7 +74,7 @@ export function initHUD() {
     row.innerHTML = `
       <span class="dot" style="--dot:${agent.color}"></span>
       <span class="who">
-        <b>${agent.name}</b>
+        <b>${agent.name} · ${agent.label}</b>
         <em>${agent.room} · ${agent.role}</em>
       </span>
       <span class="state">${STATE_LABEL.offline}</span>
@@ -168,10 +168,12 @@ export function initHUD() {
         text = `任务出错 · ${ev.message || ev.id || ''}`;
         break;
       case 'confirm.request':
-        text = `${AGENT_BY_ID[ev.agent]?.name || ev.agent || 'Agent'} 请求确认 · ${ev.question || ''}`;
+        text = `小拾在${AGENT_BY_ID[ev.agent]?.room || '屋里'}等确认 · ${ev.question || ''}`;
         break;
       case 'agent.state': {
-        const who = AGENT_BY_ID[ev.agent]?.name || ev.agent || 'Agent';
+        const meta = AGENT_BY_ID[ev.agent];
+        // 屋里只有小拾一个人，日志里用「小拾 · 房间」区分她在哪干活
+        const who = meta ? `小拾 · ${meta.room}` : ev.agent || '小拾';
         const state = STATE_LABEL[ev.state] || ev.state || '';
         const body = ev.task ? ` · ${ev.task}` : '';
         const extra = ev.detail ? ` · ${ev.detail}` : '';

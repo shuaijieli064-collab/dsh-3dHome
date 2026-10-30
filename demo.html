@@ -135,7 +135,15 @@
         lie: { pose: 'lie' },
       };
       let poseCtx = POSE_CTX[params.get('pose')] || POSE_CTX.idle;
-      window.__setPose = (name) => { poseCtx = POSE_CTX[name] || POSE_CTX.idle; window.__poseName = name; };
+      // 相位偏移：让走路/爬梯这类周期性动作能定格在指定相位截图核验
+      window.__phase = parseFloat(params.get('phase') || '0');
+      window.__setPose = (name) => {
+        poseCtx = POSE_CTX[name] || POSE_CTX.idle;
+        window.__poseName = name;
+        document.querySelectorAll('.bar [data-pose]').forEach((b) => {
+          b.classList.toggle('active', b.dataset.pose === name);
+        });
+      };
       window.__poseName = params.get('pose') || 'idle';
 
       createModeledCharacter(DEFAULT_PALETTE, {
@@ -204,7 +212,7 @@
         if (character) {
           character.userData.animate(t);
           // 骨骼层：整体位移归控制器，这里只驱动四肢躯干
-          character.userData.boneTick?.(t, dt, poseCtx);
+          character.userData.boneTick?.(t + window.__phase, dt, poseCtx);
           if (spin) character.rotation.y = Math.sin(t * 0.28) * 0.5;
           else character.rotation.y *= 0.9;
         }

@@ -91,7 +91,7 @@ async function testHost() {
 
   // The home server is expected to be running (or started by the plugin).
   const index = await get(`${base}/`);
-  check('GET /  → 200 html', index.status === 200 && index.body.includes('马维斯的小家'), `status ${index.status}`);
+  check('GET /  → 200 html', index.status === 200 && index.body.includes('小拾的小家'), `status ${index.status}`);
 
   const css = await get(`${base}/styles.css`);
   check('GET /styles.css → 200', css.status === 200, `status ${css.status}`);
@@ -129,7 +129,7 @@ async function testHostSpawns() {
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
 
   const res = await get(`http://127.0.0.1:${server.address().port}/api/dsh-home3d/`);
-  check('auto-started server answers through the proxy', res.status === 200 && res.body.includes('马维斯的小家'), `status ${res.status}`);
+  check('auto-started server answers through the proxy', res.status === 200 && res.body.includes('小拾的小家'), `status ${res.status}`);
 
   server.close();
   for (const d of disposers) {

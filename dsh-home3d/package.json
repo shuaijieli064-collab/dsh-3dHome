@@ -1,7 +1,7 @@
 {
   "name": "dsh-home3d",
   "version": "0.1.0",
-  "description": "把「马维斯的小家」3D 场景作为主区面板装进 DeepSeek Harness 桌面端：左侧栏多一行，点开即渲染小屋",
+  "description": "把「小拾的小家」3D 场景作为主区面板装进 DeepSeek Harness 桌面端：左侧栏多一行，点开即渲染小屋",
   "type": "module",
   "icon": "icon.svg",
   "main": "lib/index.js",

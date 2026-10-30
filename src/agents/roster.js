@@ -1,22 +1,24 @@
 /**
- * Agent roster — the single source of truth for who lives in the house.
- * The 3D characters are not built yet; the HUD already renders this list
- * so the data plumbing can be verified end to end.
+ * 住客名单 —— 屋里只有一位住客：**小拾**。
+ *
+ * 六个 id 不是六个不同的人，而是小拾的六个工作位置（对应六个房间）。
+ * 会话里某个工具在跑，她就在那个房间干活；换个工具就走去下一个房间。
+ * id 必须保持不变：controller 用 id 查 ZONES 拿房间锚点。
  */
 export const AGENTS = [
   {
     id: 'main',
-    name: 'Marvis',
-    label: '主 Agent',
+    name: '小拾',
+    label: '统筹',
     room: '客厅',
     zone: 'main',
     color: '#c2603f',
-    role: '总指挥 · 拆解与调度',
+    role: '拆解 · 调度 · 汇报',
   },
   {
     id: 'file',
-    name: 'File Agent',
-    label: '文件管家',
+    name: '小拾',
+    label: '管家',
     room: '书房',
     zone: 'file',
     color: '#d9a24b',
@@ -24,39 +26,39 @@ export const AGENTS = [
   },
   {
     id: 'computer',
-    name: 'Computer Agent',
-    label: '系统专员',
+    name: '小拾',
+    label: '系统',
     room: '工具间',
     zone: 'computer',
     color: '#7f8fa6',
-    role: '系统 · 硬件 · 命令',
+    role: '跑命令 · 看系统',
   },
   {
     id: 'app',
-    name: 'App Agent',
-    label: '应用专员',
+    name: '小拾',
+    label: '应用',
     room: '厨房',
     zone: 'app',
     color: '#8fae7d',
-    role: '调用 App · MCP',
+    role: '调 App · 用 MCP',
   },
   {
     id: 'browser',
-    name: 'Browser Agent',
-    label: '网页专员',
+    name: '小拾',
+    label: '网页',
     room: '飘窗',
     zone: 'browser',
     color: '#6f9fc4',
-    role: '网页 · 抓取 · 交互',
+    role: '开网页 · 抓取 · 点按',
   },
   {
     id: 'search',
-    name: 'Search Agent',
-    label: '搜索专家',
+    name: '小拾',
+    label: '联网',
     room: '阁楼',
     zone: 'search',
     color: '#a98bc4',
-    role: '联网 · 聚合 · 引用',
+    role: '搜索 · 聚合 · 引用',
   },
 ];
 

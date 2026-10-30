@@ -251,7 +251,7 @@ server.on('error', (err) => {
 
 server.listen(PORT, () => {
   console.log('');
-  console.log('  马维斯的小家 · Marvis Home');
+  console.log('  小拾的小家 · Xiaoshi Home');
   console.log(`  打开   http://localhost:${PORT}`);
   console.log(`  状态   http://localhost:${PORT}/state`);
   console.log(`  推送   POST http://localhost:${PORT}/event`);

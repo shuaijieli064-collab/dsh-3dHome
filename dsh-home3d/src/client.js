@@ -33,7 +33,7 @@ function panelFrame(doc) {
   if (frame && frame.ownerDocument === doc && frame.isConnected !== false) return frame;
   frame = doc.createElement('iframe');
   frame.src = FRAME_SRC;
-  frame.title = '马维斯的小家';
+  frame.title = '小拾的小家';
   frame.setAttribute('data-dsh-home3d-frame', '');
   frame.setAttribute('allow', 'fullscreen');
   frame.style.cssText =

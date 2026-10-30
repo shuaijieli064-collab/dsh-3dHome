@@ -177,7 +177,15 @@ export async function createModeledCharacter(palette = DEFAULT_PALETTE, opts = {
   // 表情贴片：仅当模型带 Head 命名节点（按规范建模）时挂载；
   // 贴图成品模型（如单网格小拾.glb，自带画好的脸）跳过，避免贴错位置。
   let faceMat = null;
-  const hasHead = !!nodes[NODE_NAMES.head];
+  // 注意：骨骼版模型里也有名为 Head 的**骨骼**，不能只看名字——
+  // 必须是「带网格的」Head 节点才贴图（贴图成品模型自带画好的脸，跳过）。
+  const headNode = nodes[NODE_NAMES.head];
+  let hasHead = false;
+  if (headNode && !headNode.isBone) {
+    headNode.traverse((o) => {
+      if (o.isMesh) hasHead = true;
+    });
+  }
   if (hasHead) {
     faceMat = new THREE.MeshBasicMaterial({
       map: makeFaceTexture('normal'),

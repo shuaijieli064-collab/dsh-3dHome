@@ -158,14 +158,40 @@ def compute_weights(coords, specs, H, z0):
     # 2) 长发：外张（|u| 大）或后脑后方，垂到 h≈0.42
     lock(((u > 0.22) & (h > 0.42) & (h < 0.80)) |
          ((w < -0.16) & (h > 0.50) & (h < 0.80)), 'Hair')
-    # 3) 腿：细、靠前（z>0），h<0.28
-    leg_mask = (h < 0.28) & (w > 0.005) & (u < 0.16)
-    for side, sign in (('_L', 1.0), ('_R', -1.0)):
-        xs = coords[:, 0]
-        on_side = (xs * sign) > -0.02 * H
-        lock(leg_mask & on_side & (h >= 0.24), 'Thigh' + side)
-        lock(leg_mask & on_side & (h >= 0.10) & (h < 0.24), 'Shin' + side)
-        lock(leg_mask & on_side & (h < 0.10), 'Foot' + side)
+    # 3) 腿：不能用「盒子」筛（会把裙摆前下摆一起圈进去，坐姿直接撕碎），
+    #    改为沿腿骨胶囊的紧半径判定，并留一段软过渡与裙摆混合。
+    def seg_dist(spec):
+        a = np.array(spec[2], dtype=np.float32)
+        b = np.array(spec[3], dtype=np.float32)
+        ab = b - a
+        t = np.clip((coords - a) @ ab / max(float(ab @ ab), 1e-9), 0.0, 1.0)
+        return np.linalg.norm(coords - (a + t[:, None] * ab), axis=1)
+
+    leg_names = ['Thigh_L', 'Shin_L', 'Foot_L', 'Thigh_R', 'Shin_R', 'Foot_R']
+    leg_d = np.full(n, 1e9, dtype=np.float32)
+    leg_b = np.full(n, -1, dtype=np.int32)
+    for nm in leg_names:
+        spec = next(s for s in specs if s[0] == nm)
+        d = seg_dist(spec)
+        better = d < leg_d
+        leg_d = np.where(better, d, leg_d)
+        leg_b = np.where(better, idx[nm], leg_b)
+
+    R_LEG = 0.045 * H      # 腿骨实心半径：完全归腿
+    R_SOFT = 0.095 * H     # 软过渡外沿：与裙摆混合
+    leg_core = (leg_b >= 0) & (h < 0.32) & (leg_d < R_LEG)
+    for nm in leg_names:
+        lock(leg_core & (leg_b == idx[nm]), nm)
+    # 过渡带：腿权重随距离衰减，其余给髋（裙摆）
+    soft = (leg_b >= 0) & (h < 0.32) & (leg_d >= R_LEG) & (leg_d < R_SOFT) & ~locked
+    if soft.any():
+        x = np.clip((leg_d[soft] - R_LEG) / (R_SOFT - R_LEG), 0.0, 1.0)
+        wleg = 1.0 - x * x * (3.0 - 2.0 * x)
+        rows = np.where(soft)[0]
+        W[rows, leg_b[rows]] = wleg
+        W[rows, idx['Hips']] = 1.0 - wleg
+        locked[rows] = True
+        log(f'  软过渡 腿↔裙摆     顶点 {len(rows)}')
     # 4) 裙摆/躯干下部：一律锁髋，杜绝裙摆跟着腿走
     lock((h < 0.46) & ~locked, 'Hips')
     # 5) 后下方（鲸尾）：锁髋，随髋摆动
