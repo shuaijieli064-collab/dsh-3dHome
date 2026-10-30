@@ -110,42 +110,62 @@ node scripts/push-event.mjs '{"type":"agent.state","agent":"file","state":"worki
 
 ## 接入 DeepSeek Harness
 
-在 Harness 的事件回调里，把工具调用映射成上面的协议，然后 POST 过来即可。示意：
+**已经真接了**，不是示意。`dsh-home3d` 的 host 半区订阅宿主的 `ctx.on('session/event')`，把小家协议事件直接 POST 到 `:5173/event`，所以小拾跟着爸爸的真实会话走动。
 
-```js
-async function report(ev) {
-  await fetch('http://localhost:5173/event', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(ev),
-  });
-}
+### 事件映射（`dsh-home3d/src/translate.mjs`）
 
-// 会话开始
-report({ type: 'session.start', session: id });
+| 宿主事件 | 小家的反应 |
+| --- | --- |
+| `turn/start` | 主 Agent 在客厅 `planning`（任务=会话标题） |
+| `user/message` | 客厅 `planning`（任务=你说的话，截 40 字） |
+| `tool/call` | 按工具分房间 `working`（见下表），气泡显示人话 + 参数提示 |
+| `tool/result` | 当前房间 `thinking` |
+| `ask_user_question` / `approval/asked` / `question/requested` | `waiting_confirm`（小跳等你点头） |
+| `todo/write` | 用 `in_progress` 那条 todo 覆盖任务文本 |
+| `turn/end` | `done`（带用时）/ `error` / `idle`（按 `reason.kind`） |
+| `agent/error` | `error` |
 
-// 主 Agent 拆任务
-report({ type: 'agent.state', agent: 'main', state: 'planning', task: title });
+**子会话过滤**：`header.origin === 'subagent'` 或 `delegationDepth > 0` 的事件一律丢弃。只有一个住客，不能让子代理把她拽来拽去。
 
-// 工具调用 → 对应房间
-const room = {
-  read: 'file', write: 'file', edit: 'file', grep: 'file', glob: 'file',
-  bash: 'computer', shell: 'computer',
-  webfetch: 'search', websearch: 'search',
-  browser: 'browser', mcp: 'app',
-}[toolName] || 'main';
+### 工具 → 房间（`dsh-home3d/src/tool-map.mjs`）
 
-report({ type: 'agent.state', agent: room, state: 'working', task: toolName });
+| 房间 | 工具 |
+| --- | --- |
+| 书房 `file` | `ops_read_files` `ops_grep` `ops_glob` `read` `write` `edit` `office_*` … |
+| 工具间 `computer` | `ops_bash` `bash` `job_*` `working_directory` … |
+| 阁楼 `search` | `web_search` `web_fetch` `weknora_*` `hindsight_*` … |
+| 飘窗 `browser` | `browser_*` `cua_driver_native__*` `get_browser_state` `page` |
+| 厨房 `app` | `skill` `present` `render_ui` `send_meme` `meme_*` … |
+| 客厅 `main` | `todo_write` `ask_user_question` `subagent` `workflow` `agent_teams_*` … |
+
+未命中的工具按前缀兜底（`ops_`→书房、`browser_`→飘窗…），最后回客厅。
+
+### 推送策略
+
+同 tick 内的事件合批，最多每 **120 ms** 推一次，队列上限 60 条；POST 超时 1.2 s，失败静默——小家没起或挂了都不能影响宿主。
+
+### 调试
+
+```powershell
+$env:DSH_HOME3D_DEBUG=1   # 打印每条原始 session/event，核对字段名用
 ```
 
-事件到画面的目标延迟 < 300ms。
+### 生效前提
+
+`dsh-home3d` 是 DSH bundle，host/client 半区**只在启动时解析**——改完必须**完全退出 DSH（含托盘）再启动**，刷新页面不够。启动后日志里应出现：
+
+```
+[dsh-home3d] 已订阅 session/event，会把真实会话推给小家 (:5173)
+```
+
+插件拉起服务默认**静默**（不跑演示剧本），否则假事件会和真事件打架；想单看剧本用 `config.demo = true` 或手动 `node server.mjs --demo`。
 
 ### 装成 DSH 桌面端插件（左侧栏「小家」）
 
 `dsh-home3d/` 是一个完整的 DeepSeek Harness bundle：左侧栏多一行「小家」，点开后主内容区整页渲染小屋，插件会自己拉起 `server.mjs` 并做同源反代。构建、安装、回滚步骤见 [`dsh-home3d/README.md`](dsh-home3d/README.md)。
 
 ```bash
-cd dsh-home3d && node build.mjs && node test/smoke.mjs
+cd dsh-home3d && node build.mjs && node test/smoke.mjs && node test/translate.test.mjs
 ```
 
 `src/bridge.js` 里的 SSE 地址是相对路径 `events`（不是 `/events`），这是为了让页面在插件的 `/api/dsh-home3d` 代理前缀下也能连上——改成绝对路径会让面板一直显示「连接中」。
@@ -285,12 +305,12 @@ refs/                      参考图放这里（见 refs/README.md）
 
 ## 下一步
 
-- [x] 首位 Agent 小人「小拾」（Blender 手建 GLB + 单体展示台）
-- [ ] 小拾模型瘦身（减面 + 基础色贴图降到 2K；当前 80 MB 未压缩）
-- [ ] 6 个住客小人换色进屋 + 寻路（换色需按 `建模与命名规范.txt` 重建模型，当前贴图模型不吃调色板）
+- [x] 首位 Agent 小人「小拾」（Blender 手建 GLB，已进屋，展示台停用）
 - [x] 小拾进屋：事件 → 状态机 → 栅格 A* 寻路 → 行走/爬梯 → 工位姿态 → 气泡
-- [x] 点击小人聚焦、跟随镜头
+- [x] 点击小人聚焦、跟随镜头（`F` 键或工具栏「跟随小拾」）
 - [x] 并发防抖：同优先级事件不打断当前活动，高优先级/中断类才抢占（冷却期改道挂起重试）
+- [x] 接真实 DSH 会话事件（`dsh-home3d/src/translate.mjs`，替换演示剧本）
+- [x] 面板可折叠、不挡视野（住客/日志，折叠状态记忆在 localStorage）
+- [x] 会话日志防刷屏（thinking 不记，同 agent 同状态 6s 内合并）
 - [ ] 小拾模型瘦身（减面 + 基础色贴图降到 2K；当前 80 MB 未压缩）
 - [ ] 6 个住客小人换色进屋（换色需按 `建模与命名规范.txt` 重建模型，当前贴图模型不吃调色板）
-- [ ] 接真实 Harness 事件，替换演示剧本

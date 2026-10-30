@@ -10,13 +10,14 @@ import { makeToonGradientMap } from './characterTextures.js';
 /*    - pbrMetallicRoughness.baseColorFactor as the only material input */
 /*    - embedded baseColorTexture / normalTexture (PNG/JPEG in BIN)     */
 /*    - node hierarchy with TRS (incl. parented pivots / empties)       */
+/*    - skins: SkinnedMesh + Bone 层级 + inverseBindMatrices            */
+/*      （关节由代码直接驱动 bone.rotation，不需要解析 AnimationClip）  */
 /*                                                                     */
 /*  Deliberately NOT supported (and unnecessary here):                  */
 /*    - Draco / meshopt / KTX2 compressed assets                        */
 /*    - metallicRoughnessTexture (MeshToonMaterial 不吃金属粗糙度贴图)   */
 /*    - external image URIs (只支持 GLB 内嵌贴图)                        */
-/*    - skins / skeletal animation (we animate named nodes directly)   */
-/*    - morph targets                                                   */
+/*    - morph targets / Draco / meshopt / KTX2                          */
 /*                                                                     */
 /*  Pass `gradientMap` to keep the house's toon look; we rebuild every  */
 /*  material as MeshToonMaterial so the model matches the rest.         */
@@ -169,6 +170,15 @@ async function buildScene(gltf, bin, opts) {
       const idx = readAccessor(prim.indices);
       geo.setIndex(new THREE.BufferAttribute(idx.array, 1));
     }
+    // 蒙皮属性（JOINTS_0 可能是 ubyte/ushort，WEIGHTS_0 是 float 或归一化整型）
+    if (prim.attributes.JOINTS_0 !== undefined) {
+      const j = readAccessor(prim.attributes.JOINTS_0);
+      geo.setAttribute('skinIndex', new THREE.BufferAttribute(j.array, j.itemSize));
+    }
+    if (prim.attributes.WEIGHTS_0 !== undefined) {
+      const w = readAccessor(prim.attributes.WEIGHTS_0);
+      geo.setAttribute('skinWeight', new THREE.BufferAttribute(w.array, w.itemSize));
+    }
     return geo;
   }
 
@@ -217,12 +227,22 @@ async function buildScene(gltf, bin, opts) {
   const root = new THREE.Group();
   root.name = 'GLBRoot';
   const nodes = {};
+  const nodeObjs = {};
+  const pendingSkins = [];
+
+  // 被 skin.joints 引用的节点要建成 Bone（而不是普通 Group），
+  // three 的蒙皮靠 bone.matrixWorld * inverseBindMatrix 计算。
+  const jointNodes = new Set();
+  for (const s of gltf.skins || []) {
+    for (const j of s.joints || []) jointNodes.add(j);
+  }
 
   function buildNode(index, parent) {
     const def = gltf.nodes[index];
-    const obj = new THREE.Group();
+    const obj = jointNodes.has(index) ? new THREE.Bone() : new THREE.Group();
     obj.name = def.name || `node${index}`;
     applyTRS(obj, def);
+    nodeObjs[index] = obj;
 
     if (def.mesh !== undefined) {
       const meshDef = gltf.meshes[def.mesh];
@@ -231,6 +251,9 @@ async function buildScene(gltf, bin, opts) {
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         obj.add(mesh);
+        if (def.skin !== undefined && prim.attributes.JOINTS_0 !== undefined) {
+          pendingSkins.push({ mesh, skin: def.skin });
+        }
       }
     }
     if (def.name) nodes[def.name] = obj;
@@ -244,6 +267,49 @@ async function buildScene(gltf, bin, opts) {
     ? sceneDef.nodes
     : (gltf.nodes || []).map((_, i) => i);
   for (const n of rootNodes) buildNode(n, root);
+
+  // 树搭完再绑蒙皮：此时 bone.matrixWorld 才是 rest pose 的世界矩阵，
+  // 与 inverseBindMatrix 相乘为单位阵 → 静止时零变形。
+  root.updateMatrixWorld(true);
+  bindSkins();
+
+  function bindSkins() {
+    for (const { mesh, skin: si } of pendingSkins) {
+      const s = (gltf.skins || [])[si];
+      if (!s) continue;
+      try {
+        const bones = (s.joints || []).map((i) => nodeObjs[i]).filter(Boolean);
+        if (!bones.length) throw new Error('skin.joints 全部缺失');
+        const inv = s.inverseBindMatrices != null ? readAccessor(s.inverseBindMatrices) : null;
+        const boneInverses = [];
+        for (let i = 0; i < bones.length; i++) {
+          const m = new THREE.Matrix4();
+          // glTF 矩阵是列主序，与 THREE.Matrix4 内部一致，可直接 fromArray
+          if (inv && inv.itemSize === 16) m.fromArray(inv.array, i * 16);
+          else m.copy(bones[i].matrixWorld).invert();
+          boneInverses.push(m);
+        }
+        const skeleton = new THREE.Skeleton(bones, boneInverses);
+
+        const skinned = new THREE.SkinnedMesh(mesh.geometry, mesh.material);
+        skinned.name = mesh.name || 'SkinnedMesh';
+        skinned.castShadow = mesh.castShadow;
+        skinned.receiveShadow = mesh.receiveShadow;
+        skinned.position.copy(mesh.position);
+        skinned.quaternion.copy(mesh.quaternion);
+        skinned.scale.copy(mesh.scale);
+        skinned.matrixAutoUpdate = mesh.matrixAutoUpdate;
+        skinned.frustumCulled = false; // 蒙皮包围盒不随骨骼更新，直接关剔除
+        mesh.parent.add(skinned);
+        mesh.parent.remove(mesh);
+        root.updateMatrixWorld(true);
+        skinned.bind(skeleton, skinned.matrixWorld.clone());
+      } catch (err) {
+        // 绑不上就保持刚性 Mesh，功能降级但不出错
+        console.warn('[glb] 蒙皮绑定失败，回退为刚性网格：', err);
+      }
+    }
+  }
 
   return { scene: root, nodes };
 }

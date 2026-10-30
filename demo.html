@@ -47,7 +47,20 @@
         <span class="sep"></span>
         <button id="spin">自动环绕</button>
       </div>
-      <div class="note">已接入正式模型 src/scene/assets/xiaoshi.glb（80MB，首次加载需数秒）。<br />?model=参数可临时换其它 GLB 对比。</div>
+      <div class="bar" style="bottom: 74px;">
+        <button data-pose="idle" class="active">静止</button>
+        <button data-pose="walk">走路</button>
+        <button data-pose="climb">爬梯</button>
+        <button data-pose="type">打字</button>
+        <button data-pose="sit">坐姿</button>
+        <button data-pose="stir">炒菜</button>
+        <button data-pose="lean">倚窗</button>
+        <button data-pose="planning">盘算</button>
+        <button data-pose="waiting">举手</button>
+        <button data-pose="done">庆祝</button>
+        <button data-pose="lie">躺</button>
+      </div>
+      <div class="note">已接入带骨骼的正式模型 src/scene/assets/xiaoshi_rigged.glb（97MB，首次加载需数秒）。<br />下一排按钮可逐个人物姿态；?model=参数可临时换其它 GLB 对比；?bones=1 显示骨架。</div>
       <div id="err"></div>
     </div>
 
@@ -104,6 +117,26 @@
       let character = null;
       let spin = false;
       const clock = new THREE.Clock();
+      const params = new URLSearchParams(location.search);
+
+      /* 姿态 → 骨骼动画上下文（与住客控制器传的一致） */
+      const POSE_CTX = {
+        idle: {},
+        walk: { moving: true, walkSpeed: 1.1 },
+        climb: { climbing: true },
+        type: { state: 'working' },
+        sit: { state: 'working', seated: true },
+        stir: { state: 'working', pose: 'stir' },
+        lean: { pose: 'lean' },
+        planning: { state: 'planning' },
+        waiting: { state: 'waiting_confirm' },
+        done: { state: 'done' },
+        error: { state: 'error' },
+        lie: { pose: 'lie' },
+      };
+      let poseCtx = POSE_CTX[params.get('pose')] || POSE_CTX.idle;
+      window.__setPose = (name) => { poseCtx = POSE_CTX[name] || POSE_CTX.idle; window.__poseName = name; };
+      window.__poseName = params.get('pose') || 'idle';
 
       createModeledCharacter(DEFAULT_PALETTE, {
         url: new URLSearchParams(location.search).get('model') || CHARACTER_MODEL_URL || './src/scene/assets/xiaoshi_demo.glb',
@@ -113,6 +146,11 @@
           root.position.y = 0.09;
           character = root;
           stage.add(character);
+          if (params.get('bones')) {
+            const helper = new THREE.SkeletonHelper(character);
+            helper.material.depthTest = false;
+            scene.add(helper);
+          }
           window.__charReady = true;
           window.__charObj = character;
           window.__camera = camera;
@@ -134,6 +172,14 @@
           character?.userData.setExpression(btn.dataset.exp);
         });
       });
+      // 姿态按钮
+      document.querySelectorAll('.bar [data-pose]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.bar [data-pose]').forEach((b) => b.classList.remove('active'));
+          btn.classList.add('active');
+          window.__setPose(btn.dataset.pose);
+        });
+      });
       const spinBtn = document.getElementById('spin');
       spinBtn.addEventListener('click', () => {
         spin = !spin;
@@ -149,10 +195,16 @@
       addEventListener('resize', resize);
       resize();
 
+      let last = performance.now();
       function loop() {
         const t = clock.getElapsedTime();
+        const now = performance.now();
+        const dt = Math.min((now - last) / 1000, 0.1);
+        last = now;
         if (character) {
           character.userData.animate(t);
+          // 骨骼层：整体位移归控制器，这里只驱动四肢躯干
+          character.userData.boneTick?.(t, dt, poseCtx);
           if (spin) character.rotation.y = Math.sin(t * 0.28) * 0.5;
           else character.rotation.y *= 0.9;
         }

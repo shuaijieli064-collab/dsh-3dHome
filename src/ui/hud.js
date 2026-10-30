@@ -112,6 +112,7 @@ export function initHUD() {
     const item = el('li', 'log-item');
     item.dataset.type = ev.type;
     item.dataset.at = String(Date.now());
+    if (ev.__demo === true) item.dataset.demo = 'true';
     item.innerHTML = `<time>${nowLabel()}</time><span>${text}</span>`;
     logList.prepend(item);
     if (key) logIndex.set(key, item);
@@ -125,6 +126,21 @@ export function initHUD() {
       for (const [k, v] of logIndex) if (v === gone) logIndex.delete(k);
       gone.remove();
     }
+  }
+
+  /** 清掉演示剧本留下的记录：真会话一到，假的就不该留在日志里。 */
+  function clearDemoLogs() {
+    let removed = 0;
+    for (const item of [...logList.querySelectorAll('.log-item[data-demo="true"]')]) {
+      item.remove();
+      removed += 1;
+    }
+    if (removed) {
+      logTotal = Math.max(0, logTotal - removed);
+      logCount.textContent = String(logTotal);
+      for (const [k, v] of logIndex) if (!v.isConnected) logIndex.delete(k);
+    }
+    return removed;
   }
 
   function logEvent(ev) {
@@ -255,6 +271,7 @@ export function initHUD() {
 
   return {
     logEvent,
+    clearDemoLogs,
     setAgentState,
     applySnapshot,
     resetAgents,

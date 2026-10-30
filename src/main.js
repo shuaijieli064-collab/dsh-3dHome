@@ -343,9 +343,37 @@ function updateDust(t) {
 let demoStarted = false;
 let demoTimer = null;
 let demoIndex = 0;
+// 收到过真实会话事件 → 演示剧本永久让位，不再擅自启动。
+let sawLiveEvent = false;
+// 日志里是否已经留下演示剧本的记录（首次真事件时清掉）。
+let demoLogsShown = false;
+
+function stopLocalDemo() {
+  if (!demoStarted) return;
+  demoStarted = false;
+  sawLiveEvent = true;
+  demoIndex = 0;
+  if (demoTimer) {
+    window.clearTimeout(demoTimer);
+    demoTimer = null;
+  }
+}
 
 function applyEvent(ev) {
   if (!ev || !ev.type) return;
+
+  // 真事件来了：立刻停掉可能在跑的演示剧本（否则假消息会混进会话日志）
+  if (!isDemoEvent(ev)) {
+    if (demoStarted) stopLocalDemo();
+    else sawLiveEvent = true;
+    // 首次见到真事件时，把之前演示留下的记录清掉
+    if (demoLogsShown) {
+      demoLogsShown = false;
+      hud.clearDemoLogs();
+    }
+  } else {
+    demoLogsShown = true;
+  }
 
   // 住客先拿事件：它自己区分 snapshot / agent.state / session.end
   resident.onEvent(ev);
@@ -374,19 +402,31 @@ function applyEvent(ev) {
   }
 }
 
+/** 演示剧本产生的事件打个临时标记，用来和真实会话区分。 */
+function isDemoEvent(ev) {
+  return ev.__demo === true;
+}
+
 function startLocalDemo() {
-  if (demoStarted) return;
+  // 已经收到过真实会话 → 绝不再跑假剧本
+  if (demoStarted || sawLiveEvent) return;
   demoStarted = true;
 
   const tick = () => {
     if (demoIndex >= DEMO_SCRIPT.length) demoIndex = 0;
 
     const step = DEMO_SCRIPT[demoIndex];
-    applyEvent(step.event);
+    applyEvent({ ...step.event, __demo: true });
     demoIndex += 1;
 
     if (demoIndex >= DEMO_SCRIPT.length) {
       demoTimer = window.setTimeout(tick, 6000);
+      return;
+    }
+
+    // 脚本跑到一半真会话来了，也要能立刻停
+    if (sawLiveEvent) {
+      stopLocalDemo();
       return;
     }
 
@@ -401,7 +441,8 @@ function startLocalDemo() {
 const bridge = connectBridge({
   onStatus(status) {
     hud.setConnection(status);
-    if (status === 'demo') startLocalDemo();
+    // 只有从未见过真实事件时才允许降级到演示剧本；见过的永不回退。
+    if (status === 'demo' && !sawLiveEvent) startLocalDemo();
   },
   onEvent: applyEvent,
 });

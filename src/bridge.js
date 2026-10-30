@@ -19,11 +19,15 @@ export function connectBridge({ onEvent, onStatus }) {
   let source = null;
   let closed = false;
   let failures = 0;
+  // 一旦真连上过、或收到过真实事件，就永不降级到演示剧本：
+  // 假事件混进日志比"暂时没画面"糟糕得多。
+  let everLive = false;
 
   function handle(eventName) {
     source.addEventListener(eventName, (e) => {
       try {
         const data = JSON.parse(e.data);
+        everLive = true;
         onEvent(eventName === 'snapshot' ? { type: 'snapshot', ...data } : data);
       } catch (err) {
         console.warn('[marvis-home] bad event payload', err);
@@ -41,6 +45,7 @@ export function connectBridge({ onEvent, onStatus }) {
 
     source.addEventListener('open', () => {
       failures = 0;
+      everLive = true;
       onStatus('live');
     });
 
@@ -52,7 +57,16 @@ export function connectBridge({ onEvent, onStatus }) {
     source.onerror = () => {
       if (closed) return;
       failures += 1;
+
+      // 真连上过的：SSE 断线只是暂时的，继续显示"连接中"并自动重连，
+      // 绝不切演示剧本（否则假事件会盖掉真实会话）。
+      if (everLive) {
+        onStatus('connecting');
+        return;
+      }
+
       if (failures >= 3) {
+        // 从来没连上过：说明可能真的没起服务，退一步用本地演示，保证画面不空。
         source.close();
         onStatus('demo');
       } else {

@@ -27,6 +27,9 @@ export const PRIORITY = {
 /** 这些状态是中断/收尾，无论当前在干什么都立刻生效。 */
 const ALWAYS_ACCEPT = new Set(['done', 'error', 'waiting_confirm']);
 
+/** 「等确认」最多霸占角色多少秒，之后放行后续事件。 */
+const WAIT_CONFIRM_TTL = 12;
+
 /** 降级抑制：避免 tool/result 把刚建立的 working 一闪抹掉。 */
 export function acceptTransition(cur, next, ageSec) {
   if (cur === next) return true; // 同状态：只刷新任务文本
@@ -258,16 +261,30 @@ export function createResident({ scene, home, zones, palette, opts = {} }) {
     const ageSec = act.since ? performance.now() / 1000 - act.since : 999;
 
     // 并发防抖：一个角色一次只演一件最重要的事。
-    // 同 agent 的状态流转永远生效（她就是在演这个 agent 的会话）；
-    // 换 agent 时只允许更高优先级（或中断类 done/error/waiting_confirm、
-    // 或当前空闲）来打断——两个同时 working 的 agent 若互相抢占，
-    // 小拾会在两个房间之间被拽来拽去（repathCooldown 也压不住）。
+    //
+    // 「等确认」不能永久霸占角色：它是**一次性的请求**，用户回答后会话会继续
+    // 往下走。如果它压住后续所有事件，小拾就会永远在同一个房间跳着等——真
+    // 实会话里这几乎必然发生（每个需要确认的工具后面都还有活）。
+    // 所以等待确认有「有效期」：超时或来了新的 working/planning 就放行。
+    if (
+      act.state === 'waiting_confirm' &&
+      !nav.waypoints &&
+      (next === 'working' || next === 'planning' || ageSec > WAIT_CONFIRM_TTL)
+    ) {
+      act.state = 'idle'; // 解除霸占，让下面的正常过渡逻辑接管
+    }
+
     const curKey = nav.waypoints && nav.arriveState ? nav.arriveState : act.state;
     const effCur = PRIORITY[curKey] ?? PRIORITY.idle;
     const sameAgent = act.agent === agent;
     if (!sameAgent && !ALWAYS_ACCEPT.has(next)) {
       const curIdle = act.state === 'idle' && !nav.waypoints;
-      if (!curIdle && PRIORITY[next] <= effCur) return;
+      // 平级交接要放行：真实会话里 File 干完就轮到 Computer 干，
+      // 两个都是 working(40)，若用「严格更高才能打断」会永久卡住。
+      // 只在**同房间**的平级抢占才拦（那才是真正的 ping-pong）。
+      const sameRoom = nav.targetZone === agent;
+      if (!curIdle && PRIORITY[next] < effCur) return;
+      if (!curIdle && PRIORITY[next] === effCur && sameRoom) return;
     }
 
     if (extra.teleport) {
@@ -461,7 +478,11 @@ export function createResident({ scene, home, zones, palette, opts = {} }) {
           sx = 1 - s * 0.6;
           yOff = Math.max(s, 0) * 0.35;
           if (p >= 1) {
-            setAct('idle');
+            // 收工后回到空闲，但**保留任务文本**——刚干完什么该让人看得见，
+            // 清空的话气泡会变成一句干巴巴的「歇着」。
+            const keepTask = act.task;
+            const keepDetail = act.detail;
+            setAct('idle', { task: keepTask, detail: keepDetail });
             act.dwellUntil = t + 1.5;
           }
           break;

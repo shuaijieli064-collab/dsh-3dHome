@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { loadGLB } from './glbLoader.js';
 import { makeFaceTexture } from './characterTextures.js';
+import { createBoneAnimator } from './characterAnim.js';
 
 /* ================================================================== */
 /*  模型化角色 · 配置区                                                */
@@ -12,7 +13,10 @@ import { makeFaceTexture } from './characterTextures.js';
 /* ================================================================== */
 
 /* 模型 URL 是硬性依赖：现在只有模型化这一条路线，程序化小拾已删除。 */
-export const CHARACTER_MODEL_URL = './src/scene/assets/xiaoshi.glb';
+/* 优先用带骨骼的版本（tools/rig_xiaoshi.py 产出）；它缺失或解析失败时 */
+/* 自动回退到刚性单网格版，功能降级但页面不出错。                     */
+export const CHARACTER_MODEL_URL = './src/scene/assets/xiaoshi_rigged.glb';
+const CHARACTER_MODEL_FALLBACK = './src/scene/assets/xiaoshi.glb';
 
 /* 小拾.glb 的 node_0 自带 Rx(90°)（Blender 导出时已转成 Y-up），实测   */
 /* 包围盒 y:-0.42~0.31 / z:-1.14~0 是几何原始空间；节点转正后身高 1.14。 */
@@ -153,7 +157,14 @@ export async function createModeledCharacter(palette = DEFAULT_PALETTE, opts = {
   const url = opts.url || CHARACTER_MODEL_URL;
   if (!url) throw new Error('CHARACTER_MODEL_URL 未设置，无法加载模型');
 
-  const { scene: root, nodes } = await loadGLB(url);
+  let loaded;
+  try {
+    loaded = await loadGLB(url);
+  } catch (err) {
+    console.warn('[character] 骨骼版加载失败，回退刚性单网格版：', err);
+    loaded = await loadGLB(opts.fallback || CHARACTER_MODEL_FALLBACK);
+  }
+  const { scene: root, nodes } = loaded;
 
   // Z-up 转正 + 朝向微调：包一层 holder，归一化/朝向都在 holder 上做。
   if (MODEL_UP_FIX) root.rotation.x = MODEL_UP_FIX;
@@ -204,6 +215,19 @@ export async function createModeledCharacter(palette = DEFAULT_PALETTE, opts = {
     faceMat.needsUpdate = true;
   }
 
+  // 骨骼动画器：模型带骨骼时才有（刚性版自动降级为空）
+  let animator = null;
+  try {
+    animator = createBoneAnimator(root);
+    if (!animator.debug.boneCount) animator = null;
+  } catch (err) {
+    console.warn('[character] 骨骼动画器初始化失败，退回整体动作：', err);
+    animator = null;
+  }
+  if (animator) {
+    console.info(`[character] 骨骼就绪：${animator.debug.boneCount} 根骨`);
+  }
+
   function tick(t) {
     const dress = animated.dress;
     if (dress) nodes[NODE_NAMES.dress].scale.y = dress.scaleY * (1 + Math.sin(t * 1.6) * 0.012);
@@ -245,6 +269,12 @@ export async function createModeledCharacter(palette = DEFAULT_PALETTE, opts = {
   holder.userData.setExpression = setExpression;
   holder.currentExpression = 'normal';
   setExpression('normal');
+  if (animator) {
+    holder.userData.bones = animator.bones;
+    holder.userData.animator = animator;
+    // boneTick 由住客控制器每帧调用（整体位移仍归控制器管）
+    holder.userData.boneTick = (t, dt, ctx) => animator.tick(t, dt, ctx);
+  }
 
   return holder;
 }
