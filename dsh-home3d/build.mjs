@@ -26,8 +26,18 @@ async function main() {
   await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
 
-  const host = await readFile(path.join(HERE, 'src', 'host.js'), 'utf8');
-  await writeFile(path.join(outDir, 'index.js'), host, 'utf8');
+  // host 半区：index.js + 它 import 的同目录模块（零依赖构建，不做打包，
+  // 所以相对 import 必须原样搬到 lib/ 里，路径也改成 './'）
+  const HOST_MODULES = ['host.js', 'translate.mjs', 'tool-map.mjs'];
+  for (const file of HOST_MODULES) {
+    let code = await readFile(path.join(HERE, 'src', file), 'utf8');
+    if (file === 'host.js') {
+      // src/host.js import 的是 './translate.mjs'，搬到 lib/ 后同目录依旧成立
+      code = code.replaceAll("from '../", "from './");
+    }
+    const name = file === 'host.js' ? 'index.js' : file;
+    await writeFile(path.join(outDir, name), code, 'utf8');
+  }
 
   const client = await readFile(path.join(HERE, 'src', 'client.js'), 'utf8');
   await writeFile(path.join(outDir, 'client.js'), BANNER + client + FOOTER, 'utf8');

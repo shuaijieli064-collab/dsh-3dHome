@@ -923,3 +923,128 @@ button:focus-visible {
     font-size: 10.5px;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/*  面板折叠：不挡视野                                                  */
+/*  默认展开但更小更淡；点右上角箭头收起成窄条，把画面让给 3D。           */
+/* ------------------------------------------------------------------ */
+
+.panel {
+  transition: width 0.28s cubic-bezier(0.22, 1, 0.36, 1), max-height 0.3s ease,
+    opacity 0.24s ease, padding 0.28s ease, transform 0.28s ease;
+}
+
+/* 展开态本身就是「半透明弱化」：玻璃感还在，但不抢镜 */
+.roster:not([data-collapsed='true']) {
+  opacity: 0.92;
+}
+
+.roster:not([data-collapsed='true']):hover,
+.log:not([data-collapsed='true']):hover {
+  opacity: 1;
+}
+
+.panel-fold {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel-strong) 70%, transparent);
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, transform 0.28s ease;
+}
+
+.panel-fold:hover {
+  background: var(--accent);
+  color: #fff8ef;
+}
+
+.panel-fold svg {
+  width: 11px;
+  height: 11px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.28s ease;
+}
+
+/* 收起：箭头翻转 */
+[data-collapsed='true'] .panel-fold svg {
+  transform: rotate(180deg);
+}
+
+/* --- 住客面板收起 --- */
+.roster[data-collapsed='true'] {
+  width: 96px;
+  top: 178px;
+  max-height: 44px;
+  padding: 9px 11px;
+  opacity: 0.78;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.roster[data-collapsed='true']:hover {
+  opacity: 1;
+}
+
+.roster[data-collapsed='true'] ul,
+.roster[data-collapsed='true'] .panel-foot {
+  display: none;
+}
+
+.roster[data-collapsed='true'] .panel-head {
+  margin-bottom: 0;
+  align-items: center;
+}
+
+.roster[data-collapsed='true'] .panel-head h2 {
+  font-size: 11.5px;
+}
+
+/* --- 日志面板收起 --- */
+.log[data-collapsed='true'] {
+  width: 128px;
+  max-height: 44px;
+  padding: 9px 11px;
+  opacity: 0.78;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.log[data-collapsed='true']:hover {
+  opacity: 1;
+}
+
+.log[data-collapsed='true'] ul {
+  display: none;
+}
+
+.log[data-collapsed='true'] .panel-head {
+  margin-bottom: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.log[data-collapsed='true'] .panel-head h2 {
+  font-size: 11.5px;
+}
+
+/* 移动端本来就窄：收起更紧凑 */
+@media (max-width: 720px) {
+  .roster[data-collapsed='true'] {
+    width: 84px;
+  }
+
+  .log[data-collapsed='true'] {
+    width: 112px;
+  }
+}

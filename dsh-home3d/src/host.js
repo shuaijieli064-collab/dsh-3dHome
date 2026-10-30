@@ -14,6 +14,7 @@ import { spawn } from 'node:child_process';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { translate, sessionIdOf, isPrimarySession } from './translate.mjs';
 
 export const name = 'dsh-home3d';
 export const inject = ['webServer'];
@@ -26,6 +27,37 @@ const DEFAULT_PORT = Number(process.env.DSH_HOME3D_PORT || 5173);
 const DEFAULT_ROOT = process.env.DSH_HOME3D_ROOT || PROJECT_ROOT;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* ------------------------------------------------------------------ */
+/*  真实会话 → 小家（节流推送）                                          */
+/* ------------------------------------------------------------------ */
+
+/** POST 一条协议事件到小家服务。失败只警告一次，绝不影响宿主。 */
+function postEvent(port, ev) {
+  return new Promise((resolve) => {
+    const body = JSON.stringify(ev);
+    const req = http.request(
+      {
+        host: '127.0.0.1',
+        port,
+        path: '/event',
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
+        timeout: 1200,
+      },
+      (res) => {
+        res.resume();
+        res.on('end', resolve);
+      }
+    );
+    req.on('error', () => resolve()); // 小家没起不算错误
+    req.on('timeout', () => {
+      req.destroy();
+      resolve();
+    });
+    req.end(body);
+  });
+}
 
 export function apply(ctx, config = {}) {
   const port = Number(config?.port ?? DEFAULT_PORT) || DEFAULT_PORT;
@@ -53,8 +85,13 @@ export function apply(ctx, config = {}) {
     }
     if (!autoStart) return false;
 
-    console.log(`[dsh-home3d] starting "node server.mjs --demo" in ${root}`);
-    child = spawn(process.execPath, ['server.mjs', '--demo'], {
+    // 默认静默启动：真实会话事件由 session/event 推过来，不能掺演示剧本，
+    // 否则假事件会和真事件打架（小拾在两个房间里被拽来拽去）。
+    // 想单独看演示：config.demo = true，或手动 node server.mjs --demo。
+    const demo = config?.demo === true;
+    const args = demo ? ['server.mjs', '--demo'] : ['server.mjs'];
+    console.log(`[dsh-home3d] starting "node ${args.join(' ')}" in ${root}`);
+    child = spawn(process.execPath, args, {
       cwd: root,
       // server.mjs reads PORT, so config.port stays meaningful.
       env: { ...process.env, PORT: String(port) },
@@ -152,6 +189,86 @@ export function apply(ctx, config = {}) {
     },
     'dsh-home3d: child process'
   );
+
+  /* ---------------------------------------------------------------- */
+  /*  真实会话事件 → 小家                                                */
+  /*                                                                   */
+  /*  宿主每个会话事件都会走到 session/event。这里把主会话的 turn/tool  */
+  /*  翻译成小家协议再 POST 过去，小拾就按真实对话走动。                 */
+  /*  子会话（subagent）被 isPrimarySession 过滤掉，否则唯一的小拾会在   */
+  /*  多个会话之间被拽来拽去。                                          */
+  /* ---------------------------------------------------------------- */
+
+  const source = String(config?.source ?? 'dsh'); // 'dsh' | 'off'
+  const sessionState = new Map(); // sessionId -> 翻译层累积状态
+  let queued = [];
+  let flushTimer = null;
+  let warnedOnce = false;
+
+  function flush() {
+    flushTimer = null;
+    const batch = queued;
+    queued = [];
+    for (const ev of batch) void postEvent(port, ev);
+  }
+
+  /** 合并同一 tick 内的多条事件，最多每 120ms 推一批，避免刷爆 SSE。 */
+  function schedule(events) {
+    if (!events.length) return;
+    queued.push(...events);
+    if (queued.length > 60) queued = queued.slice(-60); // 防护：不堆积
+    if (!flushTimer) flushTimer = setTimeout(flush, 120);
+  }
+
+  if (source === 'dsh' && typeof ctx.on === 'function') {
+    try {
+      const off = ctx.on('session/event', (session, event) => {
+        try {
+          if (!event || !event.type) return;
+          if (!isPrimarySession(session)) return;
+
+          const sid = sessionIdOf(session);
+          let st = sessionState.get(sid);
+          if (!st) {
+            st = {};
+            sessionState.set(sid, st);
+            // 会话太多时清理最老的，防止无界增长
+            if (sessionState.size > 32) {
+              const oldest = sessionState.keys().next().value;
+              if (oldest !== undefined) sessionState.delete(oldest);
+            }
+          }
+
+          // 调试开关：DSH_HOME3D_DEBUG=1 打印原始事件，用来核对字段名
+          if (process.env.DSH_HOME3D_DEBUG === '1') {
+            console.log('[dsh-home3d] session/event', event.type, JSON.stringify(event.data ?? {}).slice(0, 300));
+          }
+
+          const out = translate(session, event, st);
+          if (out.length) schedule(out);
+        } catch (err) {
+          if (!warnedOnce) {
+            warnedOnce = true;
+            console.warn('[dsh-home3d] 会话事件翻译失败（后续同类错误不再提示）:', err?.message ?? err);
+          }
+        }
+      });
+      console.log(`[dsh-home3d] 已订阅 session/event，会把真实会话推给小家 (:${port})`);
+      ctx.effect(() => () => {
+        try {
+          off?.();
+        } catch {
+          /* ignore */
+        }
+        if (flushTimer) clearTimeout(flushTimer);
+        flushTimer = null;
+        queued = [];
+        sessionState.clear();
+      }, 'dsh-home3d: session bridge');
+    } catch (err) {
+      console.warn('[dsh-home3d] 订阅 session/event 失败（小家仍可用，但只显示演示剧本）:', err?.message ?? err);
+    }
+  }
 
   // Warm it up at boot so the first panel open is instant.
   void ensure();

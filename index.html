@@ -45,19 +45,24 @@
         <span class="pill" id="live-pill" data-status="connecting"><i></i><span>连接中</span></span>
       </div>
 
-      <aside class="panel roster" aria-label="住客列表">
+      <aside class="panel roster" aria-label="住客列表" data-collapsed="false">
         <div class="panel-head">
           <h2>住客</h2>
-          <span>AGENTS</span>
+          <button type="button" class="panel-fold" id="roster-fold" aria-label="收起住客面板">
+            <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 7.5 6 4.5 9 7.5" /></svg>
+          </button>
         </div>
         <ul id="roster-list"></ul>
         <p class="panel-foot">接入会话后，状态会点亮这里</p>
       </aside>
 
-      <section class="panel log" aria-label="会话日志">
+      <section class="panel log" aria-label="会话日志" data-collapsed="false">
         <div class="panel-head">
           <h2>会话日志</h2>
           <span id="log-count">0</span>
+          <button type="button" class="panel-fold" id="log-fold" aria-label="收起日志面板">
+            <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 7.5 6 4.5 9 7.5" /></svg>
+          </button>
         </div>
         <ul id="log-list">
           <li class="empty">等待会话事件…</li>

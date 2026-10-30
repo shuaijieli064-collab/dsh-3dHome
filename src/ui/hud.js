@@ -29,6 +29,44 @@ export function initHUD() {
 
   const rows = new Map();
 
+  /* ---- 面板折叠：把视野让给 3D 场景 ---- */
+  const foldables = [
+    { panel: document.querySelector('.roster'), btn: document.getElementById('roster-fold'), key: 'roster' },
+    { panel: document.querySelector('.log'), btn: document.getElementById('log-fold'), key: 'log' },
+  ];
+
+  for (const f of foldables) {
+    if (!f.panel || !f.btn) continue;
+    // 记住上次的选择（刷新后不被重置）
+    try {
+      const saved = localStorage.getItem(`home3d:fold:${f.key}`);
+      if (saved !== null) f.panel.dataset.collapsed = saved;
+    } catch {
+      /* 隐私模式忽略 */
+    }
+
+    const setCollapsed = (on) => {
+      f.panel.dataset.collapsed = on ? 'true' : 'false';
+      f.btn.setAttribute('aria-label', on ? '展开面板' : '收起面板');
+      try {
+        localStorage.setItem(`home3d:fold:${f.key}`, on ? 'true' : 'false');
+      } catch {
+        /* ignore */
+      }
+    };
+
+    // 点按钮切换；收起状态下点整块面板也能展开
+    f.btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setCollapsed(f.panel.dataset.collapsed !== 'true');
+    });
+    f.panel.addEventListener('click', () => {
+      if (f.panel.dataset.collapsed === 'true') setCollapsed(false);
+    });
+
+    setCollapsed(f.panel.dataset.collapsed === 'true');
+  }
+
   for (const agent of AGENTS) {
     const row = el('li', 'roster-row');
     row.dataset.agent = agent.id;
@@ -52,13 +90,51 @@ export function initHUD() {
 
   let logTotal = 0;
 
+  // 同房间的重复状态会刷屏（真实会话里每条 tool/call + tool/result 都会来
+  // 一对）。这里合并：同一 agent 同一状态、且文本没变的，只在原地改时间戳。
+  const logIndex = new Map(); // key -> li
+  const LOG_MERGE_MS = 6000;
+
+  function pushLog(ev, text, key) {
+    const empty = logList.querySelector('.empty');
+    if (empty) empty.remove();
+
+    // 可合并的一条：还在窗口内就更新它
+    const prev = key && logIndex.get(key);
+    if (prev && prev.isConnected && Date.now() - prev.dataset.at < LOG_MERGE_MS) {
+      prev.querySelector('span').textContent = text;
+      prev.dataset.at = String(Date.now());
+      prev.querySelector('time').textContent = nowLabel();
+      logList.prepend(prev); // 挪到最前
+      return;
+    }
+
+    const item = el('li', 'log-item');
+    item.dataset.type = ev.type;
+    item.dataset.at = String(Date.now());
+    item.innerHTML = `<time>${nowLabel()}</time><span>${text}</span>`;
+    logList.prepend(item);
+    if (key) logIndex.set(key, item);
+
+    logTotal += 1;
+    logCount.textContent = String(logTotal);
+
+    while (logList.children.length > MAX_LOG) {
+      const gone = logList.lastElementChild;
+      if (!gone) break;
+      for (const [k, v] of logIndex) if (v === gone) logIndex.delete(k);
+      gone.remove();
+    }
+  }
+
   function logEvent(ev) {
     if (!ev || !ev.type) return;
 
     let text = '';
+    let key = null;
     switch (ev.type) {
       case 'session.start':
-        text = '会话开始，主 Agent 已上线';
+        text = `会话开始${ev.title ? ` · ${ev.title}` : ''}`;
         break;
       case 'session.end':
         text = '会话结束，住客回到空闲';
@@ -81,27 +157,22 @@ export function initHUD() {
       case 'agent.state': {
         const who = AGENT_BY_ID[ev.agent]?.name || ev.agent || 'Agent';
         const state = STATE_LABEL[ev.state] || ev.state || '';
-        text = `${who} → ${state}${ev.task ? ` · ${ev.task}` : ''}${ev.detail ? ` · ${ev.detail}` : ''}`;
+        const body = ev.task ? ` · ${ev.task}` : '';
+        const extra = ev.detail ? ` · ${ev.detail}` : '';
+
+        // 闲聊噪音不记：thinking/idle 的反复切换没有信息量
+        if (ev.state === 'thinking' || (ev.state === 'idle' && !ev.task)) return;
+
+        text = `${who} → ${state}${body}${extra}`;
+        // 同一 agent 同一状态 → 允许合并
+        key = `agent:${ev.agent}:${ev.state}`;
         break;
       }
       default:
         text = `${ev.type}${ev.agent ? ` · ${ev.agent}` : ''}`;
     }
 
-    const empty = logList.querySelector('.empty');
-    if (empty) empty.remove();
-
-    const item = el('li', 'log-item');
-    item.dataset.type = ev.type;
-    item.innerHTML = `<time>${nowLabel()}</time><span>${text}</span>`;
-    logList.prepend(item);
-
-    logTotal += 1;
-    logCount.textContent = String(logTotal);
-
-    while (logList.children.length > MAX_LOG) {
-      logList.lastElementChild?.remove();
-    }
+    pushLog(ev, text, key);
   }
 
   function setAgentState(id, state, meta = {}) {

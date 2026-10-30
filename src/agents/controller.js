@@ -98,10 +98,12 @@ export function createResident({ scene, home, zones, palette, opts = {} }) {
     wantsDesk: false,
     pathStartedAt: 0,
     arriveState: null,
+    pending: null, // 冷却期挂起的改道请求 {agent,state,ev}，冷却一过兑现
   };
 
   const act = {
     state: 'idle',
+    agent: null, // 当前状态归属的 agent 键（同状态换人必须重新寻路）
     task: null,
     detail: null,
     progress: null,
@@ -186,12 +188,14 @@ export function createResident({ scene, home, zones, palette, opts = {} }) {
     nav.leg = 1; // 0 是起点自己
     nav.legT = 0;
     nav.target = point;
+    nav.pending = null; // 新计划已出，挂起的旧改道作废
     nav.pathStartedAt = performance.now() / 1000;
     return true;
   }
 
-  function setAct(name, { task, detail, progress } = {}) {
+  function setAct(name, { task, detail, progress, agent } = {}) {
     act.state = name;
+    if (agent !== undefined) act.agent = agent;
     act.task = task ?? null;
     act.detail = detail ?? null;
     act.progress = progress ?? null;
@@ -221,7 +225,9 @@ export function createResident({ scene, home, zones, palette, opts = {} }) {
 
     if (ev.type === 'session.end') {
       setAct('idle');
+      act.agent = null;
       nav.waypoints = null;
+      nav.pending = null;
       act.dwellUntil = 0;
       return;
     }
@@ -251,18 +257,37 @@ export function createResident({ scene, home, zones, palette, opts = {} }) {
     const next = PRIORITY[state] !== undefined ? state : 'idle';
     const ageSec = act.since ? performance.now() / 1000 - act.since : 999;
 
+    // 并发防抖：一个角色一次只演一件最重要的事。
+    // 同 agent 的状态流转永远生效（她就是在演这个 agent 的会话）；
+    // 换 agent 时只允许更高优先级（或中断类 done/error/waiting_confirm、
+    // 或当前空闲）来打断——两个同时 working 的 agent 若互相抢占，
+    // 小拾会在两个房间之间被拽来拽去（repathCooldown 也压不住）。
+    const curKey = nav.waypoints && nav.arriveState ? nav.arriveState : act.state;
+    const effCur = PRIORITY[curKey] ?? PRIORITY.idle;
+    const sameAgent = act.agent === agent;
+    if (!sameAgent && !ALWAYS_ACCEPT.has(next)) {
+      const curIdle = act.state === 'idle' && !nav.waypoints;
+      if (!curIdle && PRIORITY[next] <= effCur) return;
+    }
+
     if (extra.teleport) {
       const spot = z.desk || z.anchor;
       pos.fromArray(spot);
       nav.waypoints = null;
+      nav.pending = null;
       nav.target = spot;
       character.position.copy(pos);
-      setAct(next === 'walking' ? 'idle' : next, { task, detail, progress });
+      setAct(next === 'walking' ? 'idle' : next, { task, detail, progress, agent });
       return;
     }
 
-    // 同状态：只刷新任务文本与进度，不重新寻路
-    if (act.state === next || (act.state === 'walking' && nav.arriveState === next)) {
+    // 同一 agent 的同状态：只刷新任务文本与进度，不重新寻路。
+    // 换了 agent（如 File 工作中 → Search 工作中）必须往下走重新寻路。
+    const wantsDeskNext = next === 'working' || next === 'planning';
+    const sameSpot =
+      act.agent === agent &&
+      (!nav.waypoints || (nav.targetZone === agent && nav.wantsDesk === wantsDeskNext));
+    if ((act.state === next || (act.state === 'walking' && nav.arriveState === next)) && sameSpot) {
       act.task = task ?? act.task;
       act.detail = detail ?? act.detail;
       act.progress = progress ?? act.progress;
@@ -272,7 +297,7 @@ export function createResident({ scene, home, zones, palette, opts = {} }) {
 
     // 目的地策略：只有「去某房间干活/盘算」才值得跑动。
     // 想想、出错、等确认这类是原地状态，犯不着为它们穿过整个屋子。
-    const wantsDesk = next === 'working' || next === 'planning';
+    const wantsDesk = wantsDeskNext;
     const wantPos = wantsDesk ? z.desk : z.anchor;
 
     const alreadyThere =
@@ -281,7 +306,7 @@ export function createResident({ scene, home, zones, palette, opts = {} }) {
       Math.abs(pos.y - wantPos[1]) < 1;
 
     if (alreadyThere) {
-      setAct(next, { task, detail, progress });
+      setAct(next, { task, detail, progress, agent });
       return;
     }
 
@@ -293,18 +318,26 @@ export function createResident({ scene, home, zones, palette, opts = {} }) {
       if (ALWAYS_ACCEPT.has(next)) nav.arriveState = next;
 
       const sameDestination = nav.targetZone === agent && nav.wantsDesk === wantsDesk;
-      if (sameDestination) return; // 同一目的地只是换个说法 → 绝不改道
+      if (sameDestination) {
+        // 同一目的地只是换个说法 → 绝不改道，但最新意图要在到达时兑现
+        nav.arriveState = next;
+        return;
+      }
       const sinceRepath = performance.now() / 1000 - nav.pathStartedAt;
-      if (sinceRepath < cfg.repathCooldown) return; // 跨目的地但太密集 → 先走完这段
+      if (sinceRepath < cfg.repathCooldown) {
+        // 跨目的地但太密集 → 先走完这段，冷却一过立刻兑现改道
+        nav.pending = { agent, state: next, ev: { task, detail, progress } };
+        return;
+      }
     } else if (!wantsDesk) {
       // 原地状态且不在移动中：就地演，不跑动
-      setAct(next, { task, detail, progress });
+      setAct(next, { task, detail, progress, agent });
       return;
     }
 
     const moved = walkTo(wantPos, agent, wantsDesk);
     if (moved) {
-      const carry = { task: task ?? act.task, detail, progress };
+      const carry = { task: task ?? act.task, detail, progress, agent };
       if (ALWAYS_ACCEPT.has(next)) {
         setAct(next, carry); // 中断类状态：边走边在气泡上体现
         nav.arriveState = next;
@@ -313,7 +346,7 @@ export function createResident({ scene, home, zones, palette, opts = {} }) {
         nav.arriveState = next;
       }
     } else {
-      setAct(next, { task, detail, progress });
+      setAct(next, { task, detail, progress, agent });
     }
   }
 
@@ -455,10 +488,20 @@ export function createResident({ scene, home, zones, palette, opts = {} }) {
 
   function update(t, dt) {
     if (!ready) return;
+    // 冷却期挂起的改道：冷却一过立刻兑现，不能静默丢掉
+    if (nav.waypoints && nav.pending) {
+      const nowP = performance.now() / 1000;
+      if (nowP - nav.pathStartedAt >= cfg.repathCooldown) {
+        const p = nav.pending;
+        nav.pending = null;
+        applyAgentState(p.agent, p.state, p.ev);
+      }
+    }
     if (nav.waypoints) {
       advance(dt);
       if (!nav.waypoints) {
         // 到达：把走路期间攒下的语义兑现成动作
+        nav.pending = null;
         const after = nav.arriveState || 'idle';
         nav.arriveState = null;
         setAct(after, { task: act.task, detail: act.detail, progress: act.progress });
