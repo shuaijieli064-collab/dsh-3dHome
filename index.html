@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f3e6d3" />
+    <title>马维斯的小家 · Marvis Home</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 15 16 5l12 10v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z' fill='%23c2603f'/%3E%3Cpath d='M12 22h8v7h-8z' fill='%23f2e6d4'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./vendor/three/three.module.js",
+          "three/addons/": "./vendor/three/addons/"
+        }
+      }
+    </script>
+  </head>
+
+  <body data-time="dusk">
+    <div id="app">
+      <canvas id="scene" aria-label="马维斯的小家 3D 场景"></canvas>
+
+      <div id="labels" class="labels"></div>
+
+      <header class="brand">
+        <p class="eyebrow">MARVIS HOME</p>
+        <h1>马维斯的小家</h1>
+        <p class="tagline">把会话状态，安放进一间屋子</p>
+      </header>
+
+      <div class="topbar">
+        <div class="seg" id="time-switch" role="group" aria-label="时间">
+          <button type="button" data-time="day">白天</button>
+          <button type="button" data-time="dusk" class="is-active">黄昏</button>
+          <button type="button" data-time="night">夜晚</button>
+        </div>
+        <button type="button" class="chip" id="rotate-btn">自动环绕</button>
+        <button type="button" class="chip" id="labels-btn">房间标签</button>
+        <span class="pill" id="live-pill" data-status="connecting"><i></i><span>连接中</span></span>
+      </div>
+
+      <aside class="panel roster" aria-label="住客列表">
+        <div class="panel-head">
+          <h2>住客</h2>
+          <span>AGENTS</span>
+        </div>
+        <ul id="roster-list"></ul>
+        <p class="panel-foot">接入会话后，状态会点亮这里</p>
+      </aside>
+
+      <section class="panel log" aria-label="会话日志">
+        <div class="panel-head">
+          <h2>会话日志</h2>
+          <span id="log-count">0</span>
+        </div>
+        <ul id="log-list">
+          <li class="empty">等待会话事件…</li>
+        </ul>
+      </section>
+
+      <nav class="dock" id="dock" aria-label="镜头预设">
+        <button type="button" data-preset="overview" class="is-active">全景</button>
+        <button type="button" data-preset="living">客厅</button>
+        <button type="button" data-preset="kitchen">厨房</button>
+        <button type="button" data-preset="study">书房</button>
+        <button type="button" data-preset="workshop">工具间</button>
+        <button type="button" data-preset="loft">阁楼</button>
+        <button type="button" data-preset="character">小拾</button>
+      </nav>
+
+      <p class="hint">拖动旋转 · 滚轮缩放 · 点击房间标签聚焦</p>
+
+      <div id="loading">
+        <div class="loader" aria-hidden="true"></div>
+        <p>正在布置小屋…</p>
+      </div>
+    </div>
+
+    <script type="module" src="./src/main.js"></script>
+    <script>
+      window.setTimeout(function () {
+        if (!window.__homeReady) {
+          var loading = document.getElementById('loading');
+          if (loading) {
+            loading.innerHTML =
+              '<p class="load-error">场景没能加载。<br />浏览器不允许直接用 file:// 打开模块脚本，<br />请双击 start.bat，<br />或运行 node server.mjs 后访问 localhost:5173。</p>';
+          }
+        }
+      }, 9000);
+    </script>
+  </body>
+</html>

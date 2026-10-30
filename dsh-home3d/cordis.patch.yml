@@ -1,0 +1,10 @@
+# dsh-home3d — bundle patch
+# Appended to the profile's plugin roster on install. `name` must equal the
+# package name used in package.json / dsh.profile.bundles.
+#
+# No `config:` block on purpose: this bundle ships no schemastery Config schema,
+# so a config row here would fail loader validation. Tune the port / root in
+# src/host.js (or via DSH_HOME3D_PORT / DSH_HOME3D_ROOT) and rebuild.
+- insert:
+    - id: ui-home3d
+      name: 'dsh-home3d'

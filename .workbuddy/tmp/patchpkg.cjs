@@ -1,0 +1,14 @@
+const fs = require('fs');
+const p = 'C:/Users/lsj/.dsh/profiles/desktop/package.json';
+const raw = fs.readFileSync(p, 'utf8');
+if (raw.charCodeAt(0) === 0xfeff) throw new Error('BOM detected');
+const j = JSON.parse(raw);
+const SPEC = 'link:D:/A_Items/学习/3d小家/dsh-home3d';
+j.dependencies ||= {};
+j.dependencies['dsh-home3d'] = SPEC;
+const b = (j.dsh ||= {}).profile ||= {};
+b.bundles ||= [];
+if (!b.bundles.includes('dsh-home3d')) b.bundles.push('dsh-home3d');
+fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
+console.log('bundles:', b.bundles.length, '| last:', b.bundles.slice(-3).join(', '));
+console.log('dep:', j.dependencies['dsh-home3d']);

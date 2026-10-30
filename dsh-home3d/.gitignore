@@ -1,0 +1,5 @@
+# lib/ is produced by `node build.mjs` — install from source, don't commit it.
+lib/
+
+# profile snapshots taken before each install (rollback material, machine-local)
+.dsh-backup/

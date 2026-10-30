@@ -1,0 +1,39 @@
+✓ Lockfile passes supply-chain policies (verified 52s ago)
+Lockfile is up to date, resolution step is skipped
+Progress: resolved 280, reused 278, downloaded 0, added 0
+Progress: resolved 281, reused 278, downloaded 1, added 0
+Progress: resolved 281, reused 278, downloaded 2, added 1
+Progress: resolved 281, reused 278, downloaded 2, added 37
+Progress: resolved 281, reused 278, downloaded 2, added 60
+Progress: resolved 281, reused 278, downloaded 2, added 94
+Progress: resolved 281, reused 278, downloaded 2, added 122
+Progress: resolved 281, reused 278, downloaded 2, added 144
+Progress: resolved 281, reused 278, downloaded 2, added 165
+Progress: resolved 281, reused 278, downloaded 2, added 189
+Progress: resolved 281, reused 278, downloaded 2, added 210
+Progress: resolved 281, reused 278, downloaded 2, added 221
+Progress: resolved 281, reused 278, downloaded 2, added 229
+Progress: resolved 281, reused 278, downloaded 2, added 249
+Progress: resolved 281, reused 278, downloaded 2, added 259
+Progress: resolved 281, reused 278, downloaded 2, added 263
+Progress: resolved 281, reused 278, downloaded 2, added 267
+Progress: resolved 281, reused 278, downloaded 2, added 272
+Progress: resolved 281, reused 278, downloaded 2, added 273
+Progress: resolved 281, reused 278, downloaded 2, added 279
+Progress: resolved 281, reused 278, downloaded 2, added 280
+Progress: resolved 281, reused 278, downloaded 2, added 281
+Progress: resolved 281, reused 278, downloaded 2, added 284
+Packages: +284 -32
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++---------
+Progress: resolved 281, reused 278, downloaded 2, added 284, done
+node_modules/cloudflared postinstall$ node scripts/postinstall.mjs && node lib/cloudflared.js bin install
+node_modules/cloudflared postinstall: Installing latest version of cloudflared
+node_modules/cloudflared postinstall: Done
+Agent skills awaiting approval: @liustack/modlens, @openviking/dsh-memory-plugin, @tt-a1i/archify-dsh.
+Run "pnpm approve" to review them.
+
+dependencies:
++ dsh-home3d <- ../../../../../../D:/A_Items/学习/3d小家/dsh-home3d
+
+Done in 1m 58.1s using pnpm v12.15.0
+EXIT=0

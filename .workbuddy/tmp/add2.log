@@ -1,0 +1,19 @@
+✓ Lockfile passes supply-chain policies (verified 7m ago)
+Error:   × adding a new package
+  ├─▶ Failed to resolve dependency tree: Failed to resolve dependency: Failed
+  │   to fetch https://codeload.github.com/Ebony-Vinyl/dsh-our-free-model/
+  │   tar.gz/778862a4d0e183ee753b8cb8f61b0efc9b5d725b: error sending request:
+  │   client error (Connect): tunnel error: unsuccessful
+  │   
+  │   Failed to resolve dsh-our-free-model@github:Ebony-Vinyl/dsh-our-free-
+  │   model#778862a4d0e183ee753b8cb8f61b0efc9b5d725b
+  ├─▶ Failed to resolve dependency: Failed to fetch https://
+  │   codeload.github.com/Ebony-Vinyl/dsh-our-free-model/
+  │   tar.gz/778862a4d0e183ee753b8cb8f61b0efc9b5d725b: error sending request:
+  │   client error (Connect): tunnel error: unsuccessful
+  ├─▶ error sending request
+  ├─▶ client error (Connect)
+  ╰─▶ tunnel error: unsuccessful
+
+dsh: plugin command failed; diagnostics: C:\Users\lsj\.dsh\profiles\desktop\.plugin-manager\logs\operation-gfaP4Q\pnpm.log
+EXIT=1

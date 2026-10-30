@@ -1,0 +1,36 @@
+? Verifying lockfile against supply-chain policies (313 entries)...
+✓ Lockfile passes supply-chain policies (313 entries in 0ms)
+Lockfile is up to date, resolution step is skipped
+Progress: resolved 1, reused 0, downloaded 0, added 0
+Error: ERR_PNPM_GIT_FETCH_FAILED
+
+  × installing dependencies
+  ╰─▶ Failed to fetch "dsh-our-free-model" from the git repository
+      "git@github.com:Ebony-Vinyl/dsh-our-free-model.git": Cloning into 'C:
+      \Users\lsj\AppData\Local\Temp\.tmpNsSnel'...
+      hostkeys_find_by_key_hostfile: hostkeys_foreach failed for /c/Users/
+      lsj/.ssh/known_hosts: Permission denied
+      Host key verification failed.
+      fatal: Could not read from remote repository.
+      
+      Please make sure you have the correct access rights
+      and the repository exists.
+  help: The lockfile records an SSH remote for this dependency, so fetching it
+        needs an SSH key for github.com.
+        
+        If git reported "Permission denied (publickey)", the host was reached
+        and refused the key. Make sure ssh-agent has a key loaded:
+        
+            ssh-add -l
+        
+        If its specifier does not ask for SSH (for example "github:owner/
+        repo"), the lockfile entry was written before pnpm v11.21 and can be
+        re-recorded over HTTPS:
+        
+            pnpm update dsh-our-free-model
+        
+        "pnpm install --force" and "pnpm install --resolution-only" do not re-
+        resolve git dependencies, so neither clears it.
+
+dsh: plugin command failed; diagnostics: C:\Users\lsj\.dsh\profiles\desktop\.plugin-manager\logs\operation-4eppb9\pnpm.log
+EXIT=1

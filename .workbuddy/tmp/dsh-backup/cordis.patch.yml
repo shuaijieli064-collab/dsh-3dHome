@@ -1,0 +1,147 @@
+# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; `!!js` expressions allowed).
+- id: desktop-shell
+  name: dsh-plugin-desktop
+  config:
+    mode: compatibility
+    macosMaterial: transparent
+    windowsMaterial: off
+    openBrowser: true
+    networkExposure: loopback
+- id: desktop-notifications
+  name: dsh-plugin-desktop/notifications
+  config:
+    enabled: true
+    notifyOnTurnCompletion: true
+    notifyOnTurnFailure: true
+    notifyOnJobCompletion: true
+    notifyOnJobFailure: true
+    notifyOnScheduleCompletion: true
+    notifyOnScheduleFailure: true
+- id: ui-settings-account
+  name: "@deepseek-ai/dsh-client-ui-settings-account"
+  config:
+    version: 1
+    step: done
+    purpose: both
+    process: standard
+    completion: completed
+    usage: detailed
+    developerTools: true
+- id: ui-chat
+  name: "@deepseek-ai/dsh-client-ui-chat"
+  config:
+    transcriptView: compact
+    performanceUsage: detailed
+    linkOpening: new-tab
+- id: ui-settings
+  name: "@deepseek-ai/dsh-client-ui-settings"
+  config:
+    enabled: true
+- id: agent-default-model
+  name: "@deepseek-ai/dsh-agent-default-model"
+  config:
+    provider: qodercn
+    model: qfmodel
+    reasoningEffort: medium
+- id: dsh-ops-shell
+  name: dsh-ops/shell
+  config:
+    promptPolicy: true
+    publishBashTool: true
+    shellPolicy: advise
+    allowSystemShellFallback: false
+    configUpdateVersion: 2
+- id: dsh-ops-file
+  name: dsh-ops/file
+  config:
+    promptPolicy: true
+    required: false
+    configUpdateVersion: 2
+- id: computer-use-cua-driver-native
+  disabled: false
+- id: web-ui-pet
+  name: "@linxin666/dsh-pet"
+  config:
+    visible: true
+    size: 160
+    right: 66
+    bottom: 155
+    petId: whale-girl
+- id: ui-skill-explorer
+  disabled: false
+- id: remote-web-ui
+  disabled: true
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      lsj:
+        displayName: 小拾的粮仓
+        apiKeyEnv: LSJ_API_KEY
+        api: openai-completions
+        baseURL: https://ws-d8skdhkinwya9nrd.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+        models:
+          - id: MiniMax/MiniMax-M3.1-Flash
+            name: MiniMax/MiniMax-M3.1-Flash
+            input:
+              - text
+          - id: deepseek-v4.1-flash-1017
+            name: deepseek-v4.1-flash-1017
+            input:
+              - text
+          - id: glm-5.3
+            name: glm-5.3
+            input:
+              - text
+          - id: qwen3.8-flash
+            name: qwen3.8-flash
+            input:
+              - text
+              - image
+          - id: kimi-k3
+            name: kimi-k3
+            input:
+              - text
+          - id: qwen3.8-27b
+            name: qwen3.8-27b
+            input:
+              - text
+          - id: deepseek-v4-pro-0813
+            name: deepseek-v4-pro-0813
+            input:
+              - text
+          - id: qwen3.8-max
+            name: qwen3.8-max
+            input:
+              - text
+          - id: deepseek-v4-flash-0731
+            name: deepseek-v4-flash-0731
+            input:
+              - text
+              - image
+          - id: qwen3.7-flash-2026-07-15
+            name: qwen3.7-flash-2026-07-15
+            input:
+              - text
+          - id: qwen3.7-flash
+            name: qwen3.7-flash
+            input:
+              - text
+- id: ui-theme
+  name: "@deepseek-ai/dsh-client-ui-theme"
+  config:
+    preference: dark
+- id: dsh-video-skin
+  disabled: true
+- id: mood
+  disabled: true
+- id: dsh-super-injector
+  disabled: true
+- id: dsh-context
+  name: dsh-context
+  config:
+    defaultOverviewRange: today
+- id: ui-git-graph
+  disabled: true

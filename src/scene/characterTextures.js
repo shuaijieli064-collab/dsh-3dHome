@@ -1,0 +1,267 @@
+import * as THREE from 'three';
+
+/* ------------------------------------------------------------------ */
+/*  Character textures — all canvas-drawn, no external assets.         */
+/* ------------------------------------------------------------------ */
+
+function canvas2d(w, h) {
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  return { c, ctx: c.getContext('2d') };
+}
+
+function toTexture(c, opts = {}) {
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  Object.assign(tex, opts);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/* Three-step toon band: shadow / mid / light.                            */
+export function makeToonGradientMap() {
+  const data = new Uint8Array([
+    105, 105, 105, 255,
+    180, 180, 180, 255,
+    255, 255, 255, 255,
+  ]);
+  const tex = new THREE.DataTexture(data, 3, 1, THREE.RGBAFormat);
+  tex.minFilter = THREE.NearestFilter;
+  tex.magFilter = THREE.NearestFilter;
+  tex.generateMipmaps = false;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Anime face decal — eyes / mouth / blush on one transparent canvas. */
+/*  The canvas maps onto a 0.44 x 0.34 spherical cap in front of the   */
+/*  head, so features keep the proportions of the reference sheet.     */
+/* ------------------------------------------------------------------ */
+
+const FACE_W = 0.44;
+const FACE_H = 0.34;
+const FACE_CY = 0.78; // head centre height
+
+const faceX = (wx) => 512 + (wx / FACE_W) * 1024;
+const faceY = (wy) => 400 - ((wy - FACE_CY) / FACE_H) * 800;
+
+const INK = '#16233f';
+
+/* One big open eye, outer corner pointing away from the nose.          */
+function drawOpenEye(ctx, x, y, w, h, side) {
+  const hw = w / 2;
+  const hh = h / 2;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(side, 1);
+
+  const lid = new Path2D();
+  lid.moveTo(-hw, 0.1 * hh);
+  lid.bezierCurveTo(-hw * 0.52, -hh * 1.04, hw * 0.56, -hh * 1.04, hw, -0.02 * hh);
+  lid.bezierCurveTo(hw * 0.62, hh * 0.94, -hw * 0.54, hh * 0.94, -hw, 0.1 * hh);
+  lid.closePath();
+
+  ctx.save();
+  ctx.clip(lid);
+
+  // sclera
+  ctx.fillStyle = '#fcfdff';
+  ctx.fillRect(-hw - 2, -hh - 2, w + 4, h + 4);
+
+  // iris — deep navy top, bright azure bottom
+  const g = ctx.createLinearGradient(0, -hh * 0.95, 0, hh * 0.95);
+  g.addColorStop(0.0, '#12274f');
+  g.addColorStop(0.3, '#2a5cae');
+  g.addColorStop(0.68, '#5fb1e9');
+  g.addColorStop(1.0, '#b9e9fb');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.ellipse(0, hh * 0.03, hw * 0.9, hh * 0.95, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // pupil
+  ctx.fillStyle = '#0a1428';
+  ctx.beginPath();
+  ctx.ellipse(0, hh * 0.12, hw * 0.4, hh * 0.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // glowing lower iris rim
+  ctx.strokeStyle = 'rgba(190,240,255,0.85)';
+  ctx.lineWidth = Math.max(8, h * 0.045);
+  ctx.beginPath();
+  ctx.ellipse(0, hh * 0.03, hw * 0.88, hh * 0.92, 0, Math.PI * 0.12, Math.PI * 0.88);
+  ctx.stroke();
+
+  // highlights
+  ctx.fillStyle = 'rgba(255,255,255,0.96)';
+  ctx.beginPath();
+  ctx.ellipse(-hw * 0.3, -hh * 0.34, hw * 0.24, hh * 0.19, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(hw * 0.36, hh * 0.36, hw * 0.1, hh * 0.085, 0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(hw * 0.08, -hh * 0.52, hw * 0.04, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore(); // unclip
+
+  // thick upper lash line
+  ctx.strokeStyle = INK;
+  ctx.lineCap = 'round';
+  ctx.lineWidth = Math.max(12, h * 0.09);
+  ctx.beginPath();
+  ctx.moveTo(-hw * 0.98, 0.08 * hh);
+  ctx.bezierCurveTo(-hw * 0.5, -hh * 1.02, hw * 0.58, -hh * 1.02, hw, -0.03 * hh);
+  ctx.stroke();
+
+  // short outer-corner flick, grown out of the lash line
+  ctx.lineWidth = Math.max(8, h * 0.05);
+  ctx.beginPath();
+  ctx.moveTo(hw * 0.94, -hh * 0.16);
+  ctx.quadraticCurveTo(hw * 1.06, -hh * 0.26, hw * 1.09, -hh * 0.4);
+  ctx.stroke();
+
+  // lower lid hint — keep it faint so it never reads as a smudge
+  ctx.strokeStyle = 'rgba(60,84,132,0.35)';
+  ctx.lineWidth = Math.max(3, h * 0.018);
+  ctx.beginPath();
+  ctx.moveTo(-hw * 0.6, hh * 0.66);
+  ctx.quadraticCurveTo(0, hh * 0.86, hw * 0.62, hh * 0.54);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+/* ^ ^ happy eyes.                                                      */
+function drawHappyEye(ctx, x, y, w, h, side) {
+  const hw = w / 2;
+  const hh = h / 2;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(side, 1);
+  ctx.strokeStyle = INK;
+  ctx.lineCap = 'round';
+  ctx.lineWidth = Math.max(12, h * 0.075);
+  ctx.beginPath();
+  ctx.moveTo(-hw * 0.9, hh * 0.22);
+  ctx.quadraticCurveTo(0, -hh * 0.62, hw * 0.9, hh * 0.22);
+  ctx.stroke();
+
+  ctx.lineWidth = Math.max(7, h * 0.04);
+  ctx.beginPath();
+  ctx.moveTo(hw * 0.85, hh * 0.05);
+  ctx.quadraticCurveTo(hw * 1.1, 0, hw * 1.14, -hh * 0.16);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/* Gentle downward arc for blinking.                                   */
+function drawClosedEye(ctx, x, y, w, h, side) {
+  const hw = w / 2;
+  const hh = h / 2;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(side, 1);
+  ctx.strokeStyle = INK;
+  ctx.lineCap = 'round';
+  ctx.lineWidth = Math.max(9, h * 0.05);
+  ctx.beginPath();
+  ctx.moveTo(-hw * 0.85, -hh * 0.02);
+  ctx.quadraticCurveTo(0, hh * 0.4, hw * 0.85, -hh * 0.02);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawMouth(ctx, kind) {
+  const x = faceX(0);
+  const y = faceY(0.663);
+
+  if (kind === 'smile') {
+    ctx.strokeStyle = '#a34b45';
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 12;
+    ctx.beginPath();
+    ctx.moveTo(x - 28, y - 6);
+    ctx.quadraticCurveTo(x, y + 22, x + 28, y - 6);
+    ctx.stroke();
+    return;
+  }
+
+  const scale = kind === 'surprised' ? 1.35 : 1;
+  const rx = 30 * scale;
+  const ry = 36 * scale;
+  const g = ctx.createRadialGradient(x, y - ry * 0.2, 2, x, y, ry);
+  g.addColorStop(0, '#c26258');
+  g.addColorStop(0.55, '#9c403b');
+  g.addColorStop(1, '#7d2f2c');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = 'rgba(255,210,200,0.5)';
+  ctx.beginPath();
+  ctx.ellipse(x - 8, y + ry * 0.28, 8, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawBlush(ctx) {
+  for (const s of [-1, 1]) {
+    const x = faceX(s * 0.155);
+    const y = faceY(0.706);
+    const r = (0.055 / FACE_W) * 1024;
+    const g = ctx.createRadialGradient(x, y, 2, x, y, r);
+    g.addColorStop(0, 'rgba(246,164,152,0.3)');
+    g.addColorStop(1, 'rgba(246,164,152,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/* expression: normal | smile | surprised | closed                      */
+export function makeFaceTexture(expression = 'normal') {
+  const { c, ctx } = canvas2d(1024, 800);
+
+  drawBlush(ctx);
+
+  const eyeW = (0.132 / FACE_W) * 1024;
+  const eyeH = (0.168 / FACE_H) * 800;
+  const eyeY = faceY(0.807);
+
+  for (const s of [-1, 1]) {
+    const x = faceX(s * 0.105);
+    if (expression === 'smile') drawHappyEye(ctx, x, eyeY, eyeW, eyeH, s);
+    else if (expression === 'closed') drawClosedEye(ctx, x, eyeY, eyeW, eyeH, s);
+    else drawOpenEye(ctx, x, eyeY, eyeW, eyeH, s);
+  }
+
+  drawMouth(ctx, expression);
+  return toTexture(c);
+}
+
+/* Wooden nameplate texture.                                              */
+export function makeSignTexture(title = '小拾', sub = 'XIAOSHI') {
+  const { c, ctx } = canvas2d(320, 176);
+  ctx.fillStyle = '#f2e6d4';
+  ctx.fillRect(0, 0, 320, 176);
+  ctx.strokeStyle = '#9a6c45';
+  ctx.lineWidth = 10;
+  ctx.strokeRect(10, 10, 300, 156);
+
+  ctx.fillStyle = '#3b2f28';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '700 74px "Microsoft YaHei", "Segoe UI", sans-serif';
+  ctx.fillText(title, 160, 74);
+  ctx.fillStyle = '#a5836a';
+  ctx.font = '600 30px "Segoe UI", sans-serif';
+  ctx.fillText(sub, 160, 134);
+
+  return toTexture(c);
+}

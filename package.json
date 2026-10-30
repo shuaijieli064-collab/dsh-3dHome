@@ -1,0 +1,15 @@
+{
+  "name": "marvis-home",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "把 AI Agent 的会话状态安放进一间温馨的 3D 小屋",
+  "scripts": {
+    "start": "node server.mjs",
+    "demo": "node server.mjs --demo",
+    "push": "node scripts/push-event.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,23 @@
+✓ Lockfile passes supply-chain policies (verified 1h ago)
+Progress: resolved 0, reused 10, downloaded 0, added 0
+Error: ERR_PNPM_NO_OFFLINE_META
+
+  × adding a new package
+  ├─▶ Failed to resolve dependency tree: Failed to resolve @deepseek-ai/
+  │   schemastery@3.18.5 in package mirror "C:\\Users\\lsj\\AppData\\Local\
+  │   \pnpm-cache\\v12/metadata\\https%3A+registry.npmjs.org\\@deepseek-ai/
+  │   schemastery.jsonl"
+  │   
+  │   Failed to resolve @deepseek-ai/schemastery@3.18.5
+  ╰─▶ Failed to resolve @deepseek-ai/schemastery@3.18.5 in package mirror "C:\
+      \Users\\lsj\\AppData\\Local\\pnpm-cache\\v12/metadata\
+      \https%3A+registry.npmjs.org\\@deepseek-ai/schemastery.jsonl"
+  help: The cache layout for registry metadata has changed. C:
+        \Users\lsj\AppData\Local\pnpm-cache\v11/
+        metadata\registry.npmjs.org\@deepseek-ai/schemastery.jsonl holds a
+        mirror from an older pnpm version, which this offline install cannot
+        read. Run one online install to repopulate the cache under the new
+        layout, then retry offline.
+
+dsh: plugin command failed; diagnostics: C:\Users\lsj\.dsh\profiles\desktop\.plugin-manager\logs\operation-icLoK0\pnpm.log
+EXIT=1

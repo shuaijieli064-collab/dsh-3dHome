@@ -1,0 +1,961 @@
+import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { C } from './props.js';
+import {
+  makeToonGradientMap,
+  makeSoftGradientMap,
+  makeFaceTexture,
+  makeWhaleApronTexture,
+  makeSignTexture,
+} from './characterTextures.js';
+import { loadModelIntoStage, CHARACTER_MODEL_URL } from './characterModel.js';
+
+/* ------------------------------------------------------------------ */
+/*  小拾 — chibi fish-maid built from primitives. Origin at the feet.   */
+/*  Full height ≈ 1.10 (feet -> hair top). Faces +z.                   */
+/* ------------------------------------------------------------------ */
+
+export const CHAR_PALETTES = {
+  marvis: { hair: 0x2a3f7e, tip: 0x5fb4dd, dress: 0x2e4470, sleeve: 0x273a63, fin: 0x5f8fd6, finLight: 0x9fd0f2, whale: '#8fb6e2' },
+  file: { hair: 0x6f8f61, tip: 0xb6d99b, dress: 0x44543a, sleeve: 0x394830, fin: 0x8fae7d, finLight: 0xc3e0ab, whale: '#9dbb88' },
+  computer: { hair: 0x79839a, tip: 0xc3cbd8, dress: 0x454d5e, sleeve: 0x3a4150, fin: 0x9aa5b8, finLight: 0xd4dae4, whale: '#a4adbe' },
+  app: { hair: 0xd98f6a, tip: 0xf7c9a8, dress: 0x82503a, sleeve: 0x6d4130, fin: 0xe8a87f, finLight: 0xf8d0ae, whale: '#e5a57d' },
+  browser: { hair: 0x9b7cb8, tip: 0xd8c4ec, dress: 0x5d4877, sleeve: 0x4e3c63, fin: 0xb996d6, finLight: 0xe0ccef, whale: '#b593d1' },
+  search: { hair: 0x54a0c4, tip: 0xa6d9ee, dress: 0x39647a, sleeve: 0x2f5265, fin: 0x7dc2dd, finLight: 0xc0e6f4, whale: '#8cc4dc' },
+};
+
+/* ------------------------------------------------------------------ */
+/*  Shared materials & helpers                                         */
+/* ------------------------------------------------------------------ */
+
+let GRAD = null;
+function gradMap() {
+  if (!GRAD) GRAD = makeToonGradientMap();
+  return GRAD;
+}
+
+let SOFT_GRAD = null;
+function softGradMap() {
+  if (!SOFT_GRAD) SOFT_GRAD = makeSoftGradientMap();
+  return SOFT_GRAD;
+}
+
+function toonMat(color, opts = {}) {
+  // MeshToonMaterial has no roughness/metalness; dropping them here keeps
+  // the console clean instead of emitting a warning per material.
+  const { roughness, metalness, ...rest } = opts;
+  return new THREE.MeshToonMaterial({ color, gradientMap: gradMap(), ...rest });
+}
+
+const OUTLINE_COLOR = 0x372e3e;
+let outlineMats = null;
+function outlineMat() {
+  if (!outlineMats) outlineMats = new THREE.MeshBasicMaterial({ color: OUTLINE_COLOR, side: THREE.BackSide });
+  return outlineMats;
+}
+
+/* Inverted-hull outline: same geometry, BackSide, inflated.             */
+function outline(source, thick = 1.055) {
+  const o = new THREE.Mesh(source.geometry, outlineMat());
+  o.position.copy(source.position);
+  o.quaternion.copy(source.quaternion);
+  o.scale.copy(source.scale).multiplyScalar(thick);
+  o.castShadow = false;
+  o.receiveShadow = false;
+  source.parent.add(o);
+  return o;
+}
+
+function sph(r, color, opts = {}) {
+  return new THREE.Mesh(new THREE.SphereGeometry(r, 26, 20), toonMat(color, opts));
+}
+
+/* ------------------------------------------------------------------ */
+/*  Small assemblies                                                   */
+/* ------------------------------------------------------------------ */
+
+function makeBow(size, color) {
+  const g = new THREE.Group();
+  const knot = sph(size * 0.3, color);
+  knot.position.y = 0;
+  g.add(knot);
+  for (const s of [-1, 1]) {
+    const loop = new THREE.Mesh(
+      new THREE.ConeGeometry(size * 0.24, size * 0.62, 14),
+      toonMat(color)
+    );
+    loop.rotation.z = s < 0 ? -Math.PI / 2 - 0.35 : Math.PI / 2 + 0.35;
+    loop.position.x = s * size * 0.3;
+    g.add(loop);
+  }
+  return g;
+}
+
+/* Fish-fin silhouette: swept tip + scalloped lower edge, root at origin. */
+function finShape(k = 1) {
+  const s = new THREE.Shape();
+  s.moveTo(0, 0.09 * k);
+  s.bezierCurveTo(0.09 * k, 0.1 * k, 0.2 * k, 0.05 * k, 0.26 * k, -0.004 * k);
+  s.lineTo(0.235 * k, -0.026 * k);
+  s.quadraticCurveTo(0.185 * k, -0.07 * k, 0.15 * k, -0.045 * k);
+  s.quadraticCurveTo(0.12 * k, -0.082 * k, 0.09 * k, -0.05 * k);
+  s.quadraticCurveTo(0.055 * k, -0.088 * k, 0.02 * k, -0.056 * k);
+  s.quadraticCurveTo(0.0 * k, -0.018 * k, 0.0 * k, 0.0);
+  s.closePath();
+  return s;
+}
+
+/* Whale fluke: two lobes with a notch in the middle.                     */
+function flukeShape(k = 1) {
+  const s = new THREE.Shape();
+  s.moveTo(0, 0.055 * k);
+  s.bezierCurveTo(-0.05 * k, 0.055 * k, -0.115 * k, 0.03 * k, -0.155 * k, -0.022 * k);
+  s.quadraticCurveTo(-0.17 * k, -0.062 * k, -0.132 * k, -0.08 * k);
+  s.quadraticCurveTo(-0.07 * k, -0.055 * k, 0, -0.014 * k);
+  s.quadraticCurveTo(0.07 * k, -0.055 * k, 0.132 * k, -0.08 * k);
+  s.quadraticCurveTo(0.17 * k, -0.062 * k, 0.155 * k, -0.022 * k);
+  s.bezierCurveTo(0.115 * k, 0.03 * k, 0.05 * k, 0.055 * k, 0, 0.055 * k);
+  s.closePath();
+  return s;
+}
+
+/* Tapered wavy lock with a navy -> cyan vertex gradient.               */
+function taperedTube(points, r0, r1, colorTop, colorBottom, opts = {}) {
+  const curve = new THREE.CatmullRomCurve3(points.map((p) => new THREE.Vector3(...p)));
+  const seg = opts.segments ?? 26;
+  const radial = opts.radial ?? 8;
+  const flat = opts.flat ?? 1;
+  const positions = [];
+  const colors = [];
+  const uvs = [];
+  const indices = [];
+  const cTop = new THREE.Color(colorTop);
+  const cBot = new THREE.Color(colorBottom);
+  // Parallel-transport frames. Frenet frames twist violently on the nearly
+  // straight, near-vertical locks used here, collapsing each tube into a
+  // flat paper blade. Propagating one reference normal along the curve
+  // keeps every cross-section round and continuous.
+  const tangents = [];
+  for (let i = 0; i <= seg; i++) tangents.push(curve.getTangentAt(i / seg).normalize());
+  const normals = [];
+  const binormals = [];
+  {
+    const seed = new THREE.Vector3(0, 0, 1);
+    if (Math.abs(seed.dot(tangents[0])) > 0.9) seed.set(1, 0, 0);
+    const n0 = new THREE.Vector3().crossVectors(tangents[0], seed).normalize();
+    normals.push(n0);
+    const q = new THREE.Quaternion();
+    for (let i = 1; i <= seg; i++) {
+      q.setFromUnitVectors(tangents[i - 1], tangents[i]);
+      const n = normals[i - 1].clone().applyQuaternion(q);
+      n.addScaledVector(tangents[i], -n.dot(tangents[i])).normalize();
+      normals.push(n);
+    }
+    for (let i = 0; i <= seg; i++) {
+      binormals.push(new THREE.Vector3().crossVectors(tangents[i], normals[i]).normalize());
+    }
+  }
+
+  for (let i = 0; i <= seg; i++) {
+    const t = i / seg;
+    const p = curve.getPointAt(t);
+    const n = normals[i];
+    const b = binormals[i];
+    const r = r0 + (r1 - r0) * Math.pow(t, 0.85);
+    const c = cTop.clone().lerp(cBot, Math.pow(t, 2.4));
+    for (let j = 0; j < radial; j++) {
+      const a = (j / radial) * Math.PI * 2;
+      const sn = Math.sin(a);
+      const cs = Math.cos(a);
+      positions.push(
+        p.x + r * (cs * n.x + sn * flat * b.x),
+        p.y + r * (cs * n.y + sn * flat * b.y),
+        p.z + r * (cs * n.z + sn * flat * b.z)
+      );
+      colors.push(c.r, c.g, c.b);
+      uvs.push(j / radial, t);
+    }
+  }
+
+  for (let i = 0; i < seg; i++) {
+    for (let j = 0; j < radial; j++) {
+      const a = i * radial + j;
+      const b1 = i * radial + ((j + 1) % radial);
+      const c1 = (i + 1) * radial + j;
+      const d = (i + 1) * radial + ((j + 1) % radial);
+      indices.push(a, b1, c1, b1, d, c1);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+function hairLock(points, r0, r1, P, opts = {}) {
+  const top = opts.top ?? P.hair;
+  const bottom = opts.tip ?? P.tip;
+  const mesh = new THREE.Mesh(
+    taperedTube(points, r0, r1, top, bottom, opts),
+    new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: gradMap() })
+  );
+  mesh.castShadow = true;
+  return mesh;
+}
+
+/* Point on the hair sphere at a given height / lateral offset.           */
+const HEAD_CY = 0.78;
+function headPoint(x, y, R = 0.306, out = 0.004) {
+  const dy = y - HEAD_CY;
+  const z = Math.sqrt(Math.max(R * R - x * x - dy * dy, 0.0004)) + out;
+  return [x, y, z];
+}
+
+/* Continuous bang sheet. Building the fringe from separate tubes left
+ * parallel grooves and deep V gaps — it read as a comb. This swept surface
+ * hugs the skull, keeps one smooth sheet, and only the hem is scalloped
+ * into pointed locks, so the bangs read as hair rather than teeth.        */
+function bangSheetGeometry({
+  R = 0.315,
+  phiHalf = 1.16,
+  yTop = 1.045,
+  tips = 8,
+  phase = 0,
+  yNotch = 0.9,
+  yTip = 0.808,
+  bulge = 0.012,
+  lockLift = 0.004,
+  cols = 150,
+  rows = 22,
+  colorTop,
+  colorTip,
+  tipMix = 0.8,
+} = {}) {
+  const cTop = new THREE.Color(colorTop);
+  const cBot = new THREE.Color(colorTip);
+  const pos = [];
+  const col = [];
+  const uv = [];
+  const idx = [];
+
+  for (let iy = 0; iy <= rows; iy++) {
+    const v = iy / rows;
+    for (let ix = 0; ix <= cols; ix++) {
+      const u = ix / cols;
+      const phi = (u * 2 - 1) * phiHalf;
+
+      const lk = u * tips + phase;
+      const f = lk - Math.floor(lk);
+      const w = 1 - Math.abs(f * 2 - 1); // 0 at lock seams, 1 at lock centre
+      const sharp = Math.pow(w, 0.85);
+
+      const yHem = yNotch - (yNotch - yTip) * sharp;
+      const y = yTop + (yHem - yTop) * v;
+
+      const dy = y - HEAD_CY;
+      const rho = Math.sqrt(Math.max(R * R - dy * dy, 0.0004)) + lockLift * sharp;
+      const x = rho * Math.sin(phi);
+      const z = rho * Math.cos(phi) + bulge * sharp * v * v;
+
+      pos.push(x, y, z);
+      uv.push(u, v);
+
+      const c = cTop.clone().lerp(cBot, Math.pow(v, 1.7) * tipMix);
+      col.push(c.r, c.g, c.b);
+    }
+  }
+
+  for (let iy = 0; iy < rows; iy++) {
+    for (let ix = 0; ix < cols; ix++) {
+      const a = iy * (cols + 1) + ix;
+      const b = a + 1;
+      const c = a + (cols + 1);
+      const d = c + 1;
+      idx.push(a, c, b, b, c, d);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/* Spherical cap in front of the head, so the face texture hugs the     */
+/* skull instead of floating as a flat card.                           */
+function makeFaceCap(width, height, radius, seg = 30) {
+  const geo = new THREE.PlaneGeometry(width, height, seg, seg);
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = Math.sqrt(Math.max(radius * radius - x * x - y * y, 0.0004));
+    pos.setZ(i, z);
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+  return geo;
+}
+
+const FACE_TEX = new Map();
+function faceTexture(name) {
+  if (!FACE_TEX.has(name)) FACE_TEX.set(name, makeFaceTexture(name));
+  return FACE_TEX.get(name);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Character                                                          */
+/* ------------------------------------------------------------------ */
+
+export function createCharacter(palette = CHAR_PALETTES.marvis, opts = {}) {
+  const g = new THREE.Group();
+  const P = { ...CHAR_PALETTES.marvis, ...palette };
+
+  const skin = 0xffeadf;
+  const skinMat = new THREE.MeshToonMaterial({ color: skin, gradientMap: softGradMap() });
+  const lace = 0xfbf7ef;
+  const gold = 0xd0a04b;
+
+  const refs = {
+    face: null,
+    faceMat: null,
+    body: null,
+    ahoge: null,
+    tail: null,
+    current: 'normal',
+  };
+
+  /* ---- legs & shoes ---- */
+
+  for (const s of [-1, 1]) {
+    const sock = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.032, 0.036, 0.135, 14),
+      toonMat(lace)
+    );
+    sock.position.set(s * 0.058, 0.1, 0);
+    g.add(sock);
+
+    const shoe = new THREE.Mesh(
+      new RoundedBoxGeometry(0.082, 0.055, 0.135, 3, 0.024),
+      toonMat(P.dress)
+    );
+    shoe.position.set(s * 0.058, 0.035, 0.018);
+    g.add(shoe);
+  }
+
+  /* ---- dress ---- */
+
+  const skirt = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.085, 0.163, 0.42, 26),
+    toonMat(P.dress)
+  );
+  skirt.position.y = 0.355;
+  g.add(skirt);
+  outline(skirt);
+
+  const petti = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.108, 0.19, 0.1, 26),
+    toonMat(lace)
+  );
+  petti.position.y = 0.16;
+  g.add(petti);
+
+  const hemRing = new THREE.Mesh(
+    new THREE.TorusGeometry(0.158, 0.02, 10, 32),
+    toonMat(lace)
+  );
+  hemRing.rotation.x = Math.PI / 2;
+  hemRing.position.y = 0.148;
+  g.add(hemRing);
+
+  for (let i = 0; i < 14; i++) {
+    const a = (i / 14) * Math.PI * 2;
+    const bob = sph(0.036, lace);
+    bob.scale.set(1, 0.85, 1);
+    bob.position.set(Math.cos(a) * 0.158, 0.132, Math.sin(a) * 0.158);
+    g.add(bob);
+  }
+
+  const corset = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.113, 0.125, 0.085, 22),
+    toonMat(P.sleeve)
+  );
+  corset.position.y = 0.515;
+  g.add(corset);
+  outline(corset);
+
+  const collar = new THREE.Mesh(
+    new THREE.TorusGeometry(0.078, 0.021, 10, 26),
+    toonMat(lace)
+  );
+  collar.rotation.x = Math.PI / 2;
+  collar.position.y = 0.565;
+  g.add(collar);
+
+  // apron front panel (curved segment, whale embroidery)
+  const apron = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.146, 0.186, 0.275, 20, 1, true, -0.62, 1.24),
+    new THREE.MeshToonMaterial({
+      color: 0xffffff,
+      map: makeWhaleApronTexture(P.whale),
+      gradientMap: gradMap(),
+      side: THREE.DoubleSide,
+    })
+  );
+  apron.position.y = 0.33;
+  apron.scale.z = 1.03;
+  g.add(apron);
+
+  // apron waist tie
+  const tie = new THREE.Mesh(
+    new THREE.TorusGeometry(0.128, 0.011, 8, 26),
+    toonMat(lace)
+  );
+  tie.rotation.x = Math.PI / 2;
+  tie.position.y = 0.478;
+  g.add(tie);
+
+  // gold bows at the front hem corners
+  for (const s of [-1, 1]) {
+    const bow = makeBow(0.085, gold);
+    bow.position.set(s * 0.1, 0.28, 0.152);
+    bow.rotation.z = s > 0 ? -0.35 : 0.35;
+    bow.rotation.x = 0.25;
+    g.add(bow);
+  }
+
+  // gold embroidery band + diamonds around the skirt, just under the apron
+  const embBand = new THREE.Mesh(
+    new THREE.TorusGeometry(0.153, 0.0075, 8, 32),
+    toonMat(gold)
+  );
+  embBand.rotation.x = Math.PI / 2;
+  embBand.position.y = 0.208;
+  g.add(embBand);
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
+    const gem = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.022),
+      toonMat(gold)
+    );
+    gem.scale.set(1, 1, 0.4);
+    gem.rotation.y = a;
+    gem.position.set(Math.cos(a) * 0.156, 0.208, Math.sin(a) * 0.156);
+    g.add(gem);
+  }
+
+  // navy collar bow with a gold brooch (from the reference front view)
+  const collarBow = makeBow(0.075, P.sleeve);
+  collarBow.position.set(0, 0.552, 0.185);
+  collarBow.rotation.x = 0.5;
+  g.add(collarBow);
+  const brooch = sph(0.016, gold);
+  brooch.position.set(0, 0.552, 0.199);
+  g.add(brooch);
+
+  // apron pinafore straps over the shoulders
+  for (const s of [-1, 1]) {
+    const strap = new THREE.Mesh(
+      new THREE.BoxGeometry(0.03, 0.135, 0.007),
+      toonMat(lace)
+    );
+    strap.position.set(s * 0.082, 0.535, 0.062);
+    strap.rotation.set(-0.32, 0, s * -0.42);
+    g.add(strap);
+  }
+
+  /* ---- arms ---- */
+
+  for (const s of [-1, 1]) {
+    const arm = new THREE.Group();
+    arm.position.set(s * 0.15, 0.53, 0.012);
+    arm.rotation.z = s * 0.46;
+
+    const puff = sph(0.06, P.sleeve);
+    puff.scale.set(1, 1.05, 1);
+    arm.add(puff);
+
+    const limb = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.03, 0.028, 0.12, 12),
+      toonMat(P.sleeve)
+    );
+    limb.position.y = -0.078;
+    arm.add(limb);
+
+    const cuff = new THREE.Mesh(
+      new THREE.TorusGeometry(0.034, 0.009, 8, 18),
+      toonMat(lace)
+    );
+    cuff.rotation.x = Math.PI / 2;
+    cuff.position.y = -0.13;
+    arm.add(cuff);
+
+    const hand = sph(0.05, skin);
+    hand.material = skinMat;
+    hand.position.set(0, -0.172, 0.012);
+    arm.add(hand);
+
+    g.add(arm);
+    outline(limb);
+  }
+
+  /* ---- head ---- */
+
+  const head = sph(0.29, skin);
+  head.material = skinMat;
+  head.position.y = 0.78;
+  g.add(head);
+  outline(head, 1.045);
+
+  // blush
+  // (baked into the face texture — no more geometric cheek balls)
+
+  /* ---- hair ---- */
+
+  // One shell with a front opening. A plain sphere cap cuts a hard
+  // horizontal rim that lands right across the forehead from above.
+  const HAIR_R = 0.308;
+  const FACE_OPEN = 0.66; // half angle of the face opening
+  const hairShell = new THREE.Mesh(
+    new THREE.SphereGeometry(
+      HAIR_R, 36, 26,
+      Math.PI / 2 + FACE_OPEN, Math.PI * 2 - FACE_OPEN * 2,
+      0, 2.12
+    ),
+    toonMat(P.hair, { roughness: 0.55 })
+  );
+  hairShell.position.y = 0.78;
+  g.add(hairShell);
+
+  // Hair-coloured under-cap behind the fringe. Without it the gaps between
+  // individual locks exposed white forehead and the bangs read as a jagged
+  // sawtooth crown. Sitting just inside the shell (and just outside the
+  // face cap) it fills those gaps without z-fighting.
+  const fringeBase = new THREE.Mesh(
+    new THREE.SphereGeometry(0.304, 48, 26, Math.PI / 2 - 1.15, 2.3, 0.68, 0.72),
+    toonMat(P.hair, { roughness: 0.55 })
+  );
+  fringeBase.position.y = 0.78;
+  g.add(fringeBase);
+
+  // no inverted-hull here: its dark interior would show through the
+  // face opening as a cave behind the fringe
+
+  // ---- fringe: one smooth swept sheet with a scalloped, pointed hem
+  const fringeTipCol = new THREE.Color(P.hair).lerp(new THREE.Color(P.tip), 0.55).getHex();
+  const bangFront = new THREE.Mesh(
+    bangSheetGeometry({
+      R: 0.316, phiHalf: 1.17, yTop: 1.05, tips: 8, phase: 0,
+      yNotch: 0.906, yTip: 0.806, bulge: 0.014, lockLift: 0.005,
+      colorTop: P.hair, colorTip: fringeTipCol, tipMix: 0.75,
+    }),
+    new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: gradMap(), side: THREE.DoubleSide })
+  );
+  g.add(bangFront);
+
+  // a shorter, offset layer tucked behind fills the notches and adds depth
+  const bangBack = new THREE.Mesh(
+    bangSheetGeometry({
+      R: 0.309, phiHalf: 1.19, yTop: 1.035, tips: 7, phase: 0.5,
+      yNotch: 0.914, yTip: 0.845, bulge: 0.006, lockLift: 0.002,
+      colorTop: P.hair, colorTip: fringeTipCol, tipMix: 0.55,
+    }),
+    new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: gradMap(), side: THREE.DoubleSide })
+  );
+  g.add(bangBack);
+
+  // cheek-edge locks: run down in front of the shell's cut edge so the
+  // straight hair boundary never shows bare skin
+  for (const s of [-1, 1]) {
+    g.add(hairLock([
+      headPoint(s * 0.23, 0.94, 0.306, 0.006),
+      headPoint(s * 0.243, 0.86, 0.306, 0.006),
+      headPoint(s * 0.252, 0.78, 0.306, 0.006),
+      headPoint(s * 0.252, 0.68, 0.306, 0.006),
+      [s * 0.242, 0.58, 0.085],
+      [s * 0.245, 0.48, 0.06],
+      [s * 0.268, 0.4, 0.045],
+    ], 0.052, 0.008, P, { flat: 0.9, segments: 30, radial: 12 }));
+  }
+
+  // ---- long side locks framing the face, wavy tips flipping outward
+  for (const s of [-1, 1]) {
+    g.add(hairLock([
+      [s * 0.222, 0.962, 0.125],
+      [s * 0.252, 0.885, 0.12],
+      [s * 0.268, 0.8, 0.1],
+      [s * 0.29, 0.71, 0.085],
+      [s * 0.288, 0.62, 0.062],
+      [s * 0.305, 0.53, 0.05],
+      [s * 0.3, 0.44, 0.032],
+      [s * 0.322, 0.355, 0.022],
+      [s * 0.352, 0.29, 0.014],
+      [s * 0.385, 0.25, 0.008],
+    ], 0.095, 0.008, P, { flat: 0.98, segments: 36, radial: 14 }));
+  }
+
+  // ---- back volume + falling locks down to the knees
+  const backMass = sph(0.2, P.hair);
+  backMass.scale.set(0.95, 1.42, 0.78);
+  backMass.position.set(0, 0.6, -0.135);
+  g.add(backMass);
+  outline(backMass, 1.05);
+
+  const backHalf = [
+    [[0, 1.0, -0.17], [0, 0.82, -0.31], [0.012, 0.6, -0.335], [0.02, 0.4, -0.31], [0.025, 0.24, -0.28]],
+    [[0.1, 0.99, -0.16], [0.14, 0.8, -0.285], [0.132, 0.58, -0.315], [0.16, 0.38, -0.285], [0.19, 0.22, -0.255]],
+    [[0.19, 0.95, -0.13], [0.245, 0.77, -0.235], [0.245, 0.55, -0.26], [0.28, 0.36, -0.225], [0.315, 0.21, -0.19]],
+    [[0.26, 0.9, -0.09], [0.315, 0.73, -0.18], [0.33, 0.52, -0.19], [0.36, 0.34, -0.155], [0.4, 0.2, -0.12]],
+  ];
+  for (const pts of backHalf) {
+    const sides = pts[0][0] === 0 ? [1] : [-1, 1];
+    for (const s of sides) {
+      const p = pts.map(([x, y, z]) => [s * x, y, z]);
+      g.add(hairLock(p, 0.078, 0.018, P, { flat: 0.92, segments: 30, radial: 12 }));
+    }
+  }
+
+  // white ribbon bow at the back waist (from the reference back view)
+  const backBow = makeBow(0.13, lace);
+  backBow.position.set(0, 0.5, -0.36);
+  g.add(backBow);
+  for (const s of [-1, 1]) {
+    const streamer = new THREE.Mesh(
+      new THREE.BoxGeometry(0.022, 0.15, 0.014),
+      toonMat(lace)
+    );
+    streamer.position.set(s * 0.038, 0.41, -0.352);
+    streamer.rotation.z = s * -0.12;
+    g.add(streamer);
+  }
+
+  /* ---- ahoge curl: a tapered lock sprouting from the crown and hooking back */
+
+  const ahoge = new THREE.Group();
+  ahoge.position.set(0, 1.035, 0.012);
+  const ahogeCurl = hairLock(
+    [
+      [0.0, 0.0, 0.0],
+      [0.004, 0.058, 0.014],
+      [0.02, 0.112, 0.006],
+      [0.042, 0.145, -0.028],
+      [0.03, 0.152, -0.072],
+      [0.004, 0.146, -0.088],
+    ],
+    0.023, 0.005, P, { segments: 26, radial: 10, flat: 1, tip: P.tip }
+  );
+  ahoge.add(ahogeCurl);
+  g.add(ahoge);
+  refs.ahoge = ahoge;
+
+  /* ---- headdress ---- */
+
+  const band = new THREE.Mesh(
+    new THREE.TorusGeometry(0.324, 0.028, 12, 48, 0.94 * Math.PI),
+    toonMat(lace, { roughness: 0.6 })
+  );
+  band.position.set(0, 0.788, -0.012);
+  band.rotation.z = 0.03 * Math.PI;
+  band.rotation.x = 0.5;
+  g.add(band);
+
+  // scalloped lace on the upper surface of the band
+  const ruffleRing = new THREE.Group();
+  ruffleRing.position.copy(band.position);
+  ruffleRing.rotation.x = band.rotation.x;
+  // Only the front/top arc gets the frill — running it all the way round
+  // left a string of detached white beads down the nape.
+  const RUFFLE_N = 16;
+  for (let i = 0; i < RUFFLE_N; i++) {
+    const a = 0.03 * Math.PI + (i / (RUFFLE_N - 1)) * 0.94 * Math.PI;
+    const ruffle = sph(0.024, lace);
+    ruffle.scale.set(1.2, 1, 0.85);
+    ruffle.position.set(Math.cos(a) * 0.324, Math.sin(a) * 0.324, 0.028);
+    ruffleRing.add(ruffle);
+  }
+  g.add(ruffleRing);
+
+  // blue bow pinned at the band's left edge
+  const bandBow = makeBow(0.1, P.fin);
+  bandBow.position.set(-0.302, 0.8, 0.035);
+  bandBow.rotation.z = 0.3;
+  bandBow.rotation.y = -0.55;
+  g.add(bandBow);
+
+  /* ---- ear fins: wing shape, dark navy edge + light membrane ---- */
+
+  // bake a slight droop into the span so both sides droop when mirrored
+  const finGeo = new THREE.ExtrudeGeometry(finShape(1), {
+    depth: 0.016,
+    bevelEnabled: true,
+    bevelThickness: 0.006,
+    bevelSize: 0.006,
+    bevelSegments: 2,
+    curveSegments: 18,
+  });
+  finGeo.rotateZ(-0.1);
+  finGeo.translate(0, 0, -0.008);
+  const finInGeo = new THREE.ShapeGeometry(finShape(0.84), 16);
+  finInGeo.rotateZ(-0.1);
+  for (const s of [-1, 1]) {
+    const fin = new THREE.Group();
+    fin.position.set(s * 0.206, 0.776, 0.034);
+    fin.rotation.set(0.34, s * 0.16, s * 0.3); // face the membrane outward for the front read
+
+    const edge = new THREE.Mesh(
+      finGeo,
+      toonMat(P.hair, { side: THREE.DoubleSide, roughness: 0.6 })
+    );
+    fin.add(edge);
+
+    const membrane = new THREE.Mesh(
+      finInGeo,
+      toonMat(P.finLight, { side: THREE.DoubleSide, roughness: 0.6 })
+    );
+    membrane.position.set(0.032, 0, 0.019);
+    fin.add(membrane);
+
+    fin.scale.set(s * 0.62, 0.62, 0.62);
+    g.add(fin);
+  }
+
+  /* ---- whale tail: curved plush stem + fan fluke ---- */
+
+  const tail = new THREE.Group();
+  tail.position.set(0, 0, 0);
+
+  const stem = new THREE.Mesh(
+    taperedTube(
+      [
+        [0.02, 0.52, -0.07],
+        [0.06, 0.4, -0.14],
+        [0.115, 0.3, -0.175],
+        [0.15, 0.21, -0.17],
+      ],
+      0.042, 0.02, P.fin, P.fin, { segments: 18, radial: 8, flat: 0.75 }
+    ),
+    new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: gradMap() })
+  );
+  stem.castShadow = true;
+  tail.add(stem);
+  outline(stem, 1.14);
+
+  const flukeRoot = new THREE.Group();
+  flukeRoot.position.set(0.155, 0.185, -0.16);
+  flukeRoot.rotation.set(-1.32, 0.12, 0.22);
+  const flukeEdge = new THREE.Mesh(
+    new THREE.ShapeGeometry(flukeShape(1.32), 16),
+    toonMat(P.hair, { side: THREE.DoubleSide, roughness: 0.6 })
+  );
+  flukeRoot.add(flukeEdge);
+  const flukeMembrane = new THREE.Mesh(
+    new THREE.ShapeGeometry(flukeShape(1.18), 16),
+    toonMat(P.fin, { side: THREE.DoubleSide, roughness: 0.6 })
+  );
+  flukeMembrane.position.set(0.006, 0.004, 0.004);
+  flukeRoot.add(flukeMembrane);
+  tail.add(flukeRoot);
+
+  g.add(tail);
+  refs.tail = tail;
+
+  /* ---- face ---- */
+
+  // Baked anime face on a spherical cap. Lashes, gradient iris and the
+  // tiny mouth live in a canvas texture — primitives could never get the
+  // line quality of the reference sheet.
+  const faceMat = new THREE.MeshBasicMaterial({
+    map: faceTexture('normal'),
+    transparent: true,
+    depthWrite: false,
+    toneMapped: false,
+  });
+  const face = new THREE.Mesh(makeFaceCap(0.44, 0.34, 0.296), faceMat);
+  face.position.set(0, 0.78, 0);
+  face.renderOrder = 2;
+  g.add(face);
+  refs.face = face;
+  refs.faceMat = faceMat;
+
+  /* ---- expressions ---- */
+
+  const blinkState = { next: 2.2, until: 0 };
+
+  function setExpression(name = 'normal') {
+    refs.current = name;
+    blinkState.until = 0;
+    faceMat.map = faceTexture(name);
+  }
+
+  setExpression('normal');
+
+  /* ---- idle animation ---- */
+
+  function tick(t, dt) {
+    // breathe: gentle scale on the dress
+    const breathe = 1 + Math.sin(t * 1.6) * 0.012;
+    skirt.scale.set(1, breathe, 1);
+
+    // ahoge spring
+    ahoge.rotation.z = Math.sin(t * 1.9) * 0.16;
+    ahoge.rotation.x = Math.cos(t * 1.3) * 0.07;
+
+    // tail lazy wag
+    tail.rotation.z = Math.sin(t * 0.9) * 0.06;
+    tail.rotation.x = Math.sin(t * 0.7) * 0.045;
+
+    // blink timer (texture swap keeps the lashes crisp)
+    if (refs.current === 'normal') {
+      if (t > blinkState.until && t > blinkState.next) {
+        blinkState.until = t + 0.11;
+        blinkState.next = t + 2.4 + Math.random() * 2.6;
+        faceMat.map = faceTexture('closed');
+      } else if (blinkState.until !== 0 && t > blinkState.until) {
+        blinkState.until = 0;
+        faceMat.map = faceTexture(refs.current);
+      }
+    }
+  }
+
+  g.userData.setExpression = setExpression;
+  g.userData.animate = tick;
+  g.currentExpression = 'normal';
+
+  return g;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Display stage — podium + nameplate + showcase lights.              */
+/* ------------------------------------------------------------------ */
+
+export function buildCharacterStage(group, palette = CHAR_PALETTES.marvis, opts = {}) {
+  const { pos = [11.8, 0, 4.65], scale = 1.6, spin = true } = opts;
+
+  const stage = new THREE.Group();
+  stage.position.set(...pos);
+  group.add(stage);
+
+  // plinth matching the house base
+  const plinth = new THREE.Mesh(
+    new THREE.BoxGeometry(2.0, 0.5, 2.0),
+    toonMat(C.oakDark)
+  );
+  plinth.position.y = -0.25;
+  plinth.castShadow = true;
+  plinth.receiveShadow = true;
+  stage.add(plinth);
+
+  const podium = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.8, 0.88, 0.09, 36),
+    toonMat(C.oak)
+  );
+  podium.position.y = 0.03;
+  podium.castShadow = true;
+  podium.receiveShadow = true;
+  stage.add(podium);
+
+  const trim = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.86, 0.86, 0.02, 36),
+    toonMat(C.oakLight)
+  );
+  trim.position.y = 0.082;
+  stage.add(trim);
+
+  const rug = new THREE.Mesh(
+    new THREE.CircleGeometry(0.52, 36),
+    toonMat(0xe9dcc6, { roughness: 1 })
+  );
+  rug.rotation.x = -Math.PI / 2;
+  rug.position.y = 0.095;
+  rug.receiveShadow = true;
+  stage.add(rug);
+
+  // nameplate
+  const plaqueGeo = new THREE.BoxGeometry(0.38, 0.19, 0.03);
+  const plaqueMat = [
+    toonMat(0x9a6c45),
+    toonMat(0x9a6c45),
+    toonMat(0x9a6c45),
+    toonMat(0x9a6c45),
+    new THREE.MeshToonMaterial({ map: makeSignTexture(), gradientMap: gradMap() }),
+    toonMat(0x9a6c45),
+  ];
+  const plaque = new THREE.Mesh(plaqueGeo, plaqueMat);
+  plaque.position.set(0, 0.14, 0.81);
+  plaque.rotation.x = -0.2;
+  plaque.castShadow = true;
+  stage.add(plaque);
+  [plaque].forEach((m) => outline(m, 1.04));
+
+  // the star
+  const character = createCharacter(palette);
+  character.scale.setScalar(scale);
+  character.position.y = 0.09;
+  stage.add(character);
+
+  // showcase lights (independent of house lamps so night keeps the glow)
+  const spotlight = new THREE.SpotLight(0xfff2de, 9, 9, 0.6, 0.75, 1.5);
+  spotlight.position.set(0.35, 3.1, 1.5);
+  spotlight.target.position.set(0, 0.85, 0);
+  spotlight.castShadow = false;
+  spotlight.userData.isLamp = true;
+  spotlight.userData.baseIntensity = 9;
+  spotlight.userData.scale = 1;
+  stage.add(spotlight);
+  stage.add(spotlight.target);
+
+  // soft frontal fill — the spot alone sculpted a hard bright mask on the face
+  const stageFill = new THREE.DirectionalLight(0xfff6ea, 0.7);
+  stageFill.position.set(0.6, 1.5, 2.6);
+  stageFill.target.position.set(0, 0.9, 0);
+  stageFill.userData.isLamp = true;
+  stageFill.userData.baseIntensity = 0.7;
+  stageFill.userData.scale = 1;
+  stage.add(stageFill);
+  stage.add(stageFill.target);
+
+  const stageHemi = new THREE.HemisphereLight(0xfff3e4, 0xd8b79b, 0.5);
+  stageHemi.position.set(0, 1.4, 0);
+  stage.add(stageHemi);
+
+  const rim = new THREE.DirectionalLight(0xa8ccff, 0.85);
+  rim.position.set(-1.6, 2.0, -1.5);
+  rim.target.position.set(0, 0.7, 0);
+  rim.userData.isLamp = true;
+  rim.userData.baseIntensity = 0.85;
+  rim.userData.scale = 1;
+  stage.add(rim);
+  stage.add(rim.target);
+
+  // The active character lives on stage.userData.character so a modeled
+  // GLB can be swapped in later without touching the animation loop. The
+  // stage tick always delegates to whatever character is live.
+  stage.userData.character = character;
+  stage.userData.charScale = scale;
+  stage.userData.tick = (t, dt) => {
+    const c = stage.userData.character;
+    if (c && typeof c.userData.animate === 'function') c.userData.animate(t, dt);
+    if (spin && c) {
+      // slow sway around the front pose; always shows the face to the camera
+      c.rotation.y = Math.sin(t * 0.28) * 0.38;
+    }
+  };
+
+  // `character` is a live getter so debug entries like
+  // window.homeScene.home.characterStage.character.userData.setExpression(...)
+  // keep working after a modeled swap.
+  const api = { stage };
+  Object.defineProperty(api, 'character', { get: () => stage.userData.character });
+  return api;
+}
+
+/* Modeled-character entry points (see characterModel.js). Re-exported so
+   callers can pull everything character-related from this module. */
+export { loadModelIntoStage, CHARACTER_MODEL_URL };

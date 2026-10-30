@@ -1,0 +1,67 @@
+{
+  "name": "dsh-profile-desktop",
+  "private": true,
+  "dependencies": {
+    "@changfenhuang/dsh-genui": "0.15.0",
+    "@dsh-external/dsh-super-injector": "github:yjh051108/dsh-routing-suite",
+    "@linxin666/dsh-client-ui-git-graph": "0.4.8",
+    "@linxin666/dsh-client-ui-skill-explorer": "0.4.8",
+    "@linxin666/dsh-remote-web-ui": "0.4.8",
+    "@liustack/modlens": "3.27.2",
+    "@nanmicoder/dsh-agent-teams": "^0.1.27",
+    "@openviking/dsh-memory-plugin": "0.5.31",
+    "@smalltailqwq/dsh-client-ui-skin-maid-atelier": "0.1.9",
+    "@tt-a1i/archify-dsh": "1.0.0",
+    "@vectorize-io/hindsight-coding-agents": "0.8.2",
+    "@wxg-prc-cpg/browser-skill-dsh-plugin": "0.3.3",
+    "@wxg-prc-cpg/dsh-weknora": "0.1.0",
+    "@xmanrui/dsh-im": "5.7.0",
+    "billion-context": "0.1.209",
+    "dsh-context": "0.77.0",
+    "dsh-feiyu-mood": "github:Yuuyuko-uu/dsh-feiyu-mood",
+    "dsh-meme": "0.1.63",
+    "dsh-ops": "0.4.4",
+    "dsh-our-free-model": "github:Ebony-Vinyl/dsh-our-free-model#778862a4d0e183ee753b8cb8f61b0efc9b5d725b",
+    "dsh-persona-dafeiyu": "0.6.0",
+    "dsh-pet": "0.3.8",
+    "dsh-speak-up": "github:Yuuyuko-uu/dsh-speak-up",
+    "dsh-video-skin": "0.1.5",
+    "dsh-whale-widget": "0.4.2",
+    "dshmarket": "1.70.2"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "@smalltailqwq/dsh-client-ui-skin-maid-atelier",
+        "@vectorize-io/hindsight-coding-agents",
+        "@wxg-prc-cpg/dsh-weknora",
+        "@wxg-prc-cpg/browser-skill-dsh-plugin",
+        "@liustack/modlens",
+        "dsh-ops",
+        "@tt-a1i/archify-dsh",
+        "dsh-whale-widget",
+        "@linxin666/dsh-client-ui-skill-explorer",
+        "dsh-meme",
+        "dsh-pet",
+        "dsh-our-free-model",
+        "@xmanrui/dsh-im",
+        "billion-context",
+        "dsh-persona-dafeiyu",
+        "@changfenhuang/dsh-genui",
+        "dsh-context",
+        "dshmarket",
+        "@openviking/dsh-memory-plugin",
+        "@nanmicoder/dsh-agent-teams",
+        "dsh-speak-up"
+      ]
+    },
+    "desktopNextScheduleBundle": 2,
+    "desktopNextPlugins": 1,
+    "desktopNextOnboarding": {
+      "version": 1,
+      "outcome": "completed"
+    }
+  }
+}

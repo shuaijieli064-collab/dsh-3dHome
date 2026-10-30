@@ -1,0 +1,281 @@
+# 马维斯的小家 · Marvis Home
+
+把 AI Agent 的会话状态，安放进一间温馨的小屋。
+
+当前版本完成了**房屋场景、家具、灯光、镜头、HUD、实时事件管道**，以及**首位 Agent 小人「小拾」的单体展示台**（房屋内寻路和状态机留到下一步）。
+
+场景全部为程序化建模 + 程序化 Canvas 贴图（不依赖任何外部模型/图片），three.js r160 已 vendor 到 `vendor/three/`，无需联网。
+
+---
+
+## 快速开始
+
+### 方式一：双击 `start.bat`（推荐）
+
+Windows 下双击 `start.bat`：它会用演示剧本启动本地服务，并自动打开 <http://localhost:5173>。右上角显示 `LIVE`。
+
+> 直接双击 `index.html` **不行**：浏览器不允许 `file://` 加载 ES Module。请走本地服务。
+
+### 方式二：命令行 + 演示剧本
+
+```bash
+npm run demo        # 等价于 node server.mjs --demo
+```
+
+### 方式三：命令行 + 真实事件
+
+```bash
+npm start           # 等价于 node server.mjs
+```
+
+页面会等待真实事件。用 CLI 试一条：
+
+```bash
+node scripts/push-event.mjs '{"type":"agent.state","agent":"file","state":"working","task":"检索合同","progress":0.4}'
+```
+
+> 无需 `npm install`，只用 Node 内置模块（Node 18+）。three.js 及其 addons 已本地化（`vendor/three/`），完全离线可用。
+
+---
+
+## 房间与 Agent 的对应
+
+| 房间 | Agent | 在这个家里负责 |
+| --- | --- | --- |
+| 客厅 | 主 Agent · Marvis | 拆解任务、调度、汇总 |
+| 书房 | File Agent | 检索、阅读、生成文件 |
+| 工具间 | Computer Agent | 系统、硬件、命令 |
+| 厨房 | App Agent | 调用 App / MCP |
+| 飘窗 | Browser Agent | 网页、抓取、交互 |
+| 阁楼 | Search Agent | 联网搜索、信息聚合 |
+
+`src/scene/home.js` 里的 `ZONES` 给出了每个房间的锚点和工位坐标，后续做小人寻路时直接复用。
+
+---
+
+## 事件协议
+
+浏览器通过 SSE 订阅 `GET /events`，服务端保留最近 300 条事件和当前状态快照。断线重连会先收到 `snapshot`。
+
+### 1. Agent 状态（核心）
+
+```json
+{
+  "type": "agent.state",
+  "agent": "file",
+  "state": "working",
+  "task": "扫描发票文件夹",
+  "progress": 0.4,
+  "detail": "第 12/30 张"
+}
+```
+
+`agent` 取值：`main` / `file` / `computer` / `app` / `browser` / `search`
+
+`state` 取值：
+
+| state | 含义 | 之后的 3D 表现 |
+| --- | --- | --- |
+| `idle` | 空闲 | 在屋里漫游、喝咖啡 |
+| `planning` | 规划中 | 走到客厅黑板前 |
+| `walking` | 前往中 | 沿路径走向工位 |
+| `working` | 工作中 | 在工位打字 / 翻文件 |
+| `thinking` | 思考中 | 原地托腮、气泡 |
+| `waiting_confirm` | 等待确认 | 举手 + 问号气泡 |
+| `done` | 已完成 | 伸懒腰 + 对勾 |
+| `error` | 出错 | 抱头 + 感叹号 |
+
+### 2. 任务生命周期
+
+```json
+{ "type": "session.start", "session": "abc" }
+{ "type": "task.start", "id": "t1", "title": "整理合同", "steps": ["检索", "阅读", "汇总"] }
+{ "type": "task.step", "id": "t1", "agent": "file", "label": "检索合同" }
+{ "type": "confirm.request", "id": "t1", "agent": "computer", "question": "要删除这 3 个文件吗？" }
+{ "type": "task.done", "id": "t1", "title": "整理合同" }
+{ "type": "task.error", "id": "t1", "agent": "file", "message": "权限不足" }
+{ "type": "session.end" }
+```
+
+### 3. 接口
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` | `/events` | SSE 事件流（`snapshot` / `state`） |
+| `POST` | `/event` | 推送一条事件 |
+| `GET` | `/state` | 当前各 Agent 状态 + 最近 50 条事件 |
+| `GET` | `/health` | 健康检查 |
+
+---
+
+## 接入 DeepSeek Harness
+
+在 Harness 的事件回调里，把工具调用映射成上面的协议，然后 POST 过来即可。示意：
+
+```js
+async function report(ev) {
+  await fetch('http://localhost:5173/event', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(ev),
+  });
+}
+
+// 会话开始
+report({ type: 'session.start', session: id });
+
+// 主 Agent 拆任务
+report({ type: 'agent.state', agent: 'main', state: 'planning', task: title });
+
+// 工具调用 → 对应房间
+const room = {
+  read: 'file', write: 'file', edit: 'file', grep: 'file', glob: 'file',
+  bash: 'computer', shell: 'computer',
+  webfetch: 'search', websearch: 'search',
+  browser: 'browser', mcp: 'app',
+}[toolName] || 'main';
+
+report({ type: 'agent.state', agent: room, state: 'working', task: toolName });
+```
+
+事件到画面的目标延迟 < 300ms。
+
+### 装成 DSH 桌面端插件（左侧栏「小家」）
+
+`dsh-home3d/` 是一个完整的 DeepSeek Harness bundle：左侧栏多一行「小家」，点开后主内容区整页渲染小屋，插件会自己拉起 `server.mjs` 并做同源反代。构建、安装、回滚步骤见 [`dsh-home3d/README.md`](dsh-home3d/README.md)。
+
+```bash
+cd dsh-home3d && node build.mjs && node test/smoke.mjs
+```
+
+`src/bridge.js` 里的 SSE 地址是相对路径 `events`（不是 `/events`），这是为了让页面在插件的 `/api/dsh-home3d` 代理前缀下也能连上——改成绝对路径会让面板一直显示「连接中」。
+
+---
+
+## 角色 · 小拾
+
+首位 Agent 小人的单体展示，位于房屋右前方的木质展示台（`#character` 预设直达）。
+
+**形象**（依据 `角色三视图（正面_侧面_背面）.png`）：Q 版两头身鱼娘 maid——深蓝渐变长发（发梢天蓝）、白蕾丝头环 + 左侧蓝蝴蝶结、卷曲呆毛、两侧鱼鳍耳翼、藏青连衣裙 + 鲸鱼图案白围裙、裙摆金蝴蝶结、背后白蝴蝶结飘带、鲸尾、白袜深蓝鞋；全程序化建模 + Canvas 贴图 + MeshToonMaterial 三阶渐变着色 + 反壳（BackSide 放大壳）描边，离线零依赖。
+
+**头发**：发束改用**平行传输帧**（而非 Frenet 帧）的锥形管，避免近垂直曲线上法线翻转导致截面塌成纸片；刘海是一整张**连续曲面**（`bangSheetGeometry`），只在裙摆式下缘做出尖角，背后再叠一层错位短帘补缝，因此不再出现「梳齿」和露头皮；白蕾丝头饰是**前上弧半环**，头顶保留蓝发与从发根长出的呆毛。
+
+**文件分工**：
+
+| 文件 | 内容 |
+| --- | --- |
+| `src/scene/characters.js` | 角色拼装（头/发/裙/鳍/尾/表情）、`createCharacter`、展示台 `buildCharacterStage`、6 套住客调色板 `CHAR_PALETTES` |
+| `src/scene/characterTextures.js` | Canvas 贴图：toon 色阶图、虹膜（含瞳孔与高光）、鲸鱼围裙绣样、木质名牌 |
+
+**表情系统**：`character.userData.setExpression('normal' \| 'smile' \| 'surprised' \| 'closed')`，
+眨眼由 `tick` 内的计时器自动触发。浏览器控制台调试入口：
+
+```js
+window.homeScene.home.characterStage.character.userData.setExpression('smile')
+```
+
+**6 套住客调色板**：`CHAR_PALETTES` 按 `main/file/computer/app/browser/search` 预留，
+形象同款换色（发色/裙色/鳍色/围裙鲸鱼色联动）。后续小人进屋时按房间取色即可。
+
+亮相动画自动循环：呼吸起伏、呆毛弹簧摆、鲸尾慢摆、正向左右轻转（面向镜头）；
+舞台聚光与补光自定义为灯组（`isLamp`），夜晚模式不受房屋灯光变暗影响。
+
+**眼睛彩蛋**：虹膜贴图底部有高光带，灭灯的深夜看它会发亮（MeshBasicMaterial 不受光照影响）。
+
+### 可选：用 Blender 手建 GLB 替换（追求 100% 还原）
+
+默认仍是上面的**程序化小拾**（零外部依赖、离线）。若想尽量 1:1 还原设定图，可走手建模型路线：
+
+- 在 Blender 按 `角色三视图（正面_侧面_背面）.png` 建模，导出单文件 `xiaoshi.glb` 放到 `src/scene/assets/`。
+- 在 `src/scene/characterModel.js` 顶部把 `CHARACTER_MODEL_URL` 从 `null` 改为模型路径即可启用；留空则静默回退到程序化版。
+- 命名规范（节点名 / 材质名 / 导出设置 / 头部对位尺寸）见 `src/scene/assets/建模与命名规范.txt`。
+- 该路线用**极简自研 GLB 解析器**（`src/scene/glbLoader.js`，零依赖、离线），按高度归一化、用 `CHAR_PALETTES` 接管材质颜色，并复用现有 `tick()` 动画（呼吸/眨眼/鲸尾/呆毛/鳍）与 Canvas 表情系统——模型只提供形状与纯色，脸 / 鲸鱼围裙 / 名牌等细节仍由代码生成，保证线稿级质感。
+- 注意：本方案用「空物体 / 父子层级」做动画枢轴，不使用骨骼蒙皮（解析器不处理蒙皮，且现有动画只需旋转/缩放约 5 个命名部件）。若后续需要完整骨骼动画，可升级到 VRM + `three-vrm`。
+
+---
+
+## 场景约定（摆位规则）
+
+- **橱柜一律朝屋内**：厨房在 `+x` / `+z` 两个切口边上，柜门、把手、冰箱门、水龙头都朝向房间内部；切口那一侧是柜背。看厨房请从屋内看（`2.2, 3.9, 0.6`），从屋外只能看到柜背。
+- **没有天花板，所以没有吊灯**：全屋照明由落地灯（`floorLamp`）、台灯（`tableLamp`）、壁炉与串灯承担，灯必须落在台面或地面上，不许悬空。
+- **没有房梁**：立面只保留墙、踢脚与阁楼栏杆，屋顶方向不放任何横梁/椽木。
+- **厨房识别度**：`kitchenCounter` 的 `splash` 选项会生成一段瓷砖挡水板（复用 `makeTileTexture`）+ 挂杆挂钩；水槽是台面开洞后的真实凹陷盆，不是贴在台面上的板。
+- **软装补齐**：每个功能区都要有「使用痕迹」，不留整块空地。客厅壁炉配柴筐（`logBasket`）与火具架（`fireTools`），沙发背搭毯（`throwBlanket`）；餐厅有地毯 + 三套餐位（`placeSetting`）；工具间洞洞板挂满工具、台面配工作灯与零件罐；阁楼床有床头板（`headboard`）、床尾搭毯、墙上小画与阅读坐垫。
+- **地毯要「托住家具」**：`rug(w, d, rotation, variant)` 的第 4 个参数是配色版本（0 陶土菱格 / 1 鼠尾草条纹 / 2 石板蓝格纹 / 3 赭黄菱格），四块地毯不再共用同一张贴图。地毯是有 18 mm 厚度的实体块并带短边流苏，不是零厚度贴片——贴片一贴地就丢边，且会和其他平铺物共面闪烁。摆位规则：椅子/桌子/沙发的前腿必须落在地毯上，地毯不外溢到墙里、不与门口地垫或另一块地毯相交。
+- **地垫与地毯分层**：门口地垫（`entryMat`）是暖色椰棕块，压在地毯外、并与其留出 15 cm 以上间隙；所有平铺物高度各不相同，避免 z-fighting。
+- **挂杆上要挂东西**：`kitchenCounter` 的 `rail` 抬到台面上方 33 cm（瓷砖中部），杆上挂折叠茶巾（双面布 + 折边 + 色带）和一把木铲；调料罐移到水槽左侧，不再挡在挂杆下方。
+- **能开门的柜子前面要留净空**：冰箱（`fridge`）是真能开的——上下两扇门各挂在一个铰链 Group 上，`fridge().userData.setOpen(rad, which?)` 可驱动（`which` 取 `'top'` / `'bottom'`）。所以它不能塞进墙角：门宽 0.78 m，门前必须留 ≥ 0.9 m 净空，否则门板会撞上对面柜体。冰箱沿 `+x` 切口摆在侧台北端 `(5.68, 0, 0.98)`、门朝 `-x`，侧台相应缩短到 2.15 m；开门扫掠区落在空地上，90° 全开时用包围盒实测碰撞 hits 为空。腾出来的东南角补了一盆小绿植。
+
+---
+
+## 快捷键
+
+| 按键 | 作用 |
+| --- | --- |
+| `1` – `7` | 全景 / 客厅 / 厨房 / 书房 / 工具间 / 阁楼 / 小拾 |
+| `R` | 自动环绕 |
+| `L` | 显示 / 隐藏房间标签 |
+| `D` / `U` / `N` | 白天 / 黄昏 / 夜晚 |
+
+拖动旋转，滚轮缩放，点击房间标签飞过去。
+
+### 镜头直达（深链）
+
+URL 加 `#预设名` 直接进入某个镜头，方便截图、演示和调试：
+
+```
+http://localhost:5173/#overview     # 全景
+http://localhost:5173/#living       # 客厅
+http://localhost:5173/#kitchen      # 厨房
+http://localhost:5173/#study        # 书房
+http://localhost:5173/#workshop     # 工具间
+http://localhost:5173/#loft          # 阁楼
+http://localhost:5173/#character     # 小拾展示台
+```
+
+所有预设都在 `src/scene/home.js` 的 `CAMERA_PRESETS` 里，改坐标即可调整取景。
+
+> 小技巧：把相机标低（y < 3.6）看楼下时，房间标签会自动做遮挡剔除——
+> 被阁楼楼板挡住的「书房」标签会隐藏，不会悬浮在楼板上。
+
+---
+
+## 目录结构
+
+```
+index.html                 页面与 HUD 骨架
+styles.css                 玻璃拟态 UI、昼夜主题
+package.json               "type": "module"，让 Node 直接读 src 下的 ES Module
+start.bat                  Windows 一键启动（演示剧本 + 打开浏览器）
+server.mjs                 零依赖 Node 服务（静态 + SSE + 事件接收）
+scripts/push-event.mjs     命令行推送测试
+vendor/three/              three.js r160 本地副本（核心 + OrbitControls + RoundedBoxGeometry）
+src/
+  main.js                  渲染循环、镜头飞行、事件分发
+  bridge.js                SSE 连接与断线降级
+  scene/
+    home.js                房屋、房间、家具摆放、灯光、镜头预设
+    props.js               程序化家具库（沙发、壁炉、橱柜…）
+    textures.js            程序化贴图（木地板、地毯、墙面、窗外风景）
+    characters.js          小拾角色（拼装、表情、展示台、住客调色板）
+    characterTextures.js   角色贴图（toon 色阶、虹膜、鲸鱼围裙、名牌）
+  ui/
+    hud.js                 住客名册、会话日志、状态徽标
+    labels.js              房间标签投影（带遮挡剔除，被楼板挡住自动隐藏）
+  agents/
+    roster.js              Agent 名单与状态字典（人物待接入）
+  data/
+    demo.js                演示剧本（服务端与浏览器共用）
+refs/                      参考图放这里（见 refs/README.md）
+```
+
+---
+
+## 下一步
+
+- [x] 首位 Agent 小人「小拾」（卡通渲染精修 + 单体展示台）
+- [ ] 6 个住客小人换色进屋 + 寻路
+- [ ] waypoint 图 + A* 寻路，绕开家具
+- [ ] 状态机：事件 → 目标房间 → 行走 → 工位动画 → 气泡（对接 `setExpression`）
+- [ ] 点击小人聚焦、跟随镜头
+- [ ] 接真实 Harness 事件，替换演示剧本

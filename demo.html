@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>小拾 · 模型化路线演示</title>
+    <style>
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+      #app { position: fixed; inset: 0; background: radial-gradient(120% 120% at 50% 20%, #fbeede 0%, #f0d9c0 55%, #e7c6a4 100%); }
+      canvas { display: block; }
+      .hud { position: fixed; left: 18px; top: 16px; color: #4a3b2c; }
+      .hud h1 { margin: 0; font-size: 18px; letter-spacing: 1px; }
+      .hud p { margin: 4px 0 0; font-size: 12px; opacity: 0.75; }
+      .bar { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); display: flex; gap: 8px; align-items: center;
+             background: rgba(255,255,255,0.72); backdrop-filter: blur(8px); padding: 8px 10px; border-radius: 14px;
+             box-shadow: 0 6px 22px rgba(120,80,40,0.18); }
+      .bar button { border: 0; background: #fff; color: #5a4634; font-size: 13px; padding: 7px 12px; border-radius: 9px;
+                    cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+      .bar button.active { background: #c2603f; color: #fff; }
+      .bar .sep { width: 1px; height: 18px; background: rgba(0,0,0,0.12); }
+      .note { position: fixed; right: 16px; bottom: 18px; font-size: 11px; color: #6b5840; opacity: 0.7; max-width: 240px; text-align: right; line-height: 1.5; }
+      #err { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; color: #8a3b2a; font-size: 14px; padding: 24px; text-align: center; }
+    </style>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./vendor/three/three.module.js",
+          "three/addons/": "./vendor/three/addons/"
+        }
+      }
+    </script>
+  </head>
+  <body data-time="dusk">
+    <div id="app">
+      <canvas id="scene"></canvas>
+      <div class="hud">
+        <h1>小拾 · 模型化路线演示</h1>
+        <p>Blender 按三视图建模 → 导出 GLB → 解析器加载 → 复用 tick() 动画与换色/表情</p>
+      </div>
+      <div class="bar">
+        <button data-exp="normal" class="active">平静</button>
+        <button data-exp="smile">微笑</button>
+        <button data-exp="surprised">惊讶</button>
+        <button data-exp="closed">闭眼</button>
+        <span class="sep"></span>
+        <button id="spin">自动环绕</button>
+      </div>
+      <div class="note">已接入正式模型 src/scene/assets/xiaoshi.glb（80MB，首次加载需数秒）。<br />?model=参数可临时换其它 GLB 对比。</div>
+      <div id="err"></div>
+    </div>
+
+    <script type="module">
+      import * as THREE from 'three';
+      import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+      import { createModeledCharacter, DEFAULT_PALETTE, CHARACTER_MODEL_URL } from './src/scene/characterModel.js';
+
+      const canvas = document.getElementById('scene');
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xf3e2cb);
+
+      const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
+      camera.position.set(2.2, 1.7, 3.0);
+
+      const controls = new OrbitControls(camera, canvas);
+      controls.target.set(0, 0.95, 0);
+      controls.enableDamping = true;
+      controls.minDistance = 1.6;
+      controls.maxDistance = 8;
+
+      // 灯光
+      scene.add(new THREE.HemisphereLight(0xfff4e2, 0x6b4f3a, 0.9));
+      const key = new THREE.DirectionalLight(0xfff1d8, 1.15);
+      key.position.set(3, 5, 2);
+      key.castShadow = true;
+      key.shadow.mapSize.set(1024, 1024);
+      key.shadow.camera.near = 1; key.shadow.camera.far = 20;
+      key.shadow.camera.left = -3; key.shadow.camera.right = 3;
+      key.shadow.camera.top = 3; key.shadow.camera.bottom = -3;
+      scene.add(key);
+      scene.add(new THREE.AmbientLight(0xffffff, 0.25));
+
+      // 展示台
+      const stage = new THREE.Group();
+      const disk = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.05, 1.12, 0.12, 48),
+        new THREE.MeshStandardMaterial({ color: 0xe9d4b6, roughness: 0.85 })
+      );
+      disk.position.y = 0.06; disk.receiveShadow = true;
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(1.05, 0.025, 12, 64),
+        new THREE.MeshStandardMaterial({ color: 0xc98b5a, roughness: 0.6 })
+      );
+      ring.rotation.x = Math.PI / 2; ring.position.y = 0.12;
+      stage.add(disk, ring);
+      scene.add(stage);
+
+      let character = null;
+      let spin = false;
+      const clock = new THREE.Clock();
+
+      createModeledCharacter(DEFAULT_PALETTE, {
+        url: new URLSearchParams(location.search).get('model') || CHARACTER_MODEL_URL || './src/scene/assets/xiaoshi_demo.glb',
+      })
+        .then((root) => {
+          root.scale.multiplyScalar(1.6);
+          root.position.y = 0.09;
+          character = root;
+          stage.add(character);
+          window.__charReady = true;
+          window.__charObj = character;
+          window.__camera = camera;
+          window.__THREE = THREE;
+        })
+        .catch((e) => {
+          window.__charError = e.message;
+          const el = document.getElementById('err');
+          el.style.display = 'flex';
+          el.textContent = '模型加载失败：' + e.message;
+          console.error(e);
+        });
+
+      // 表情按钮
+      document.querySelectorAll('.bar [data-exp]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.bar [data-exp]').forEach((b) => b.classList.remove('active'));
+          btn.classList.add('active');
+          character?.userData.setExpression(btn.dataset.exp);
+        });
+      });
+      const spinBtn = document.getElementById('spin');
+      spinBtn.addEventListener('click', () => {
+        spin = !spin;
+        spinBtn.classList.toggle('active', spin);
+      });
+
+      function resize() {
+        const w = innerWidth, h = innerHeight;
+        renderer.setSize(w, h, false);
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+      }
+      addEventListener('resize', resize);
+      resize();
+
+      function loop() {
+        const t = clock.getElapsedTime();
+        if (character) {
+          character.userData.animate(t);
+          if (spin) character.rotation.y = Math.sin(t * 0.28) * 0.5;
+          else character.rotation.y *= 0.9;
+        }
+        controls.update();
+        renderer.render(scene, camera);
+        requestAnimationFrame(loop);
+      }
+      loop();
+    </script>
+  </body>
+</html>
