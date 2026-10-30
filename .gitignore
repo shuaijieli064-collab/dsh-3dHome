@@ -1,0 +1,8 @@
+# 临时验证脚本与截图（工作笔记，不入库）
+.workbuddy/tmp/
+.workbuddy/*.png
+# 根目录的模型原件是 assets 副本的备份，160MB 仓库没必要
+小拾.glb
+# 依赖与产物
+node_modules/
+dsh-home3d/.dsh-backup/
