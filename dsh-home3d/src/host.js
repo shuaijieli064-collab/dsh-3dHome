@@ -134,16 +134,35 @@ export function apply(ctx, config = {}) {
     // proxy buffer instead of reaching the page.
     delete headers['accept-encoding'];
 
+    const isSSE = target.includes('/events');
+
     const upstream = http.request(
       { host: '127.0.0.1', port, path: target, method: req.method, headers },
       (ures) => {
-        res.writeHead(ures.statusCode || 502, ures.headers);
+        const isStream = ures.headers['content-type']?.includes('text/event-stream');
+        const outHeaders = { ...ures.headers };
+        if (isStream) {
+          // SSE 不能有 content-length，也不能被任何层缓冲
+          delete outHeaders['content-length'];
+          outHeaders['cache-control'] = 'no-cache, no-transform';
+          outHeaders.connection = 'keep-alive';
+          outHeaders['x-accel-buffering'] = 'no'; // nginx 类代理的防缓冲开关
+          res.writeHead(ures.statusCode || 200, outHeaders);
+          res.flushHeaders?.(); // 立刻把头推给浏览器，EventSource 才能进 open
+        } else {
+          res.writeHead(ures.statusCode || 502, outHeaders);
+        }
+        if (DEBUG && isSSE) console.log('[dsh-home3d] SSE upstream status', ures.statusCode, 'stream=', isStream);
         ures.pipe(res);
       }
     );
     upstream.on('error', (err) => {
       if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' });
       res.end(`[dsh-home3d] 无法连到小家服务 :${port} — ${err.message}`);
+    });
+    // 客户端断开（切走面板）时也要断开上游，否则 SSE 连接会堆积
+    res.on('close', () => {
+      if (!res.writableEnded) upstream.destroy();
     });
     req.pipe(upstream);
   }
@@ -159,8 +178,19 @@ export function apply(ctx, config = {}) {
       return;
     }
 
-    const raw = (req.url || '/').slice(MOUNT.length) || '/';
-    const target = raw.startsWith('/') ? raw : `/${raw}`;
+  const DEBUG = process.env.DSH_HOME3D_DEBUG === '1';
+
+    const rawUrl = req.url || '/';
+    // 宿主可能已经剥掉前缀（也有的保留），两种都兼容：
+    //   保留了 → '/api/dsh-home3d/events'  → 要 slice
+    //   剥掉了 → '/events'                 → 不能 slice
+    const target = rawUrl.startsWith(MOUNT)
+      ? rawUrl.slice(MOUNT.length) || '/'
+      : rawUrl || '/';
+
+    if (DEBUG) {
+      console.log(`[dsh-home3d] proxy ${req.method} ${rawUrl} → ${target}`);
+    }
     proxy(req, res, target === '/' ? '/index.html' : target);
   };
 

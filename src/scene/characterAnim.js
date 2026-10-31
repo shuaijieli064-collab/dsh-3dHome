@@ -86,16 +86,16 @@ const POSES = {
       Chest: [0.03, s * 0.03],
       Head: [-0.02, -s * 0.03],
       Hair: [s * 0.05, 0],
-      UpperArm_L: [-s * 0.42, 0.05],
-      UpperArm_R: [s * 0.42, -0.05],
-      Forearm_L: [-0.18 + s * 0.1, 0],
-      Forearm_R: [-0.18 - s * 0.1, 0],
+      UpperArm_L: [-s * 0.5, 0.06],
+      UpperArm_R: [s * 0.5, -0.06],
+      Forearm_L: [-0.22 + s * 0.12, 0],
+      Forearm_R: [-0.22 - s * 0.12, 0],
       Thigh_L: [-s * 0.5, 0],
       Thigh_R: [s * 0.5, 0],
       Shin_L: [Math.max(0, s) * 0.55, 0],
       Shin_R: [Math.max(0, -s) * 0.55, 0],
-      Foot_L: [c * 0.1, 0],
-      Foot_R: [-c * 0.1, 0],
+      Foot_L: [c * 0.12, 0],
+      Foot_R: [-c * 0.12, 0],
     };
   },
 
@@ -132,35 +132,35 @@ const POSES = {
     };
   },
 
-  /* 打字（坐姿叠加） */
+  /* 打字：双手在身前下方交替轻敲（前臂+手腕一起颤，读得出敲击感） */
   type(t) {
     const s = Math.sin(t * 11);
     return {
-      Spine: [0.16, 0],
-      Chest: [0.06, 0],
-      Head: [0.2, 0],
+      Spine: [0.1, 0],
+      Chest: [0.05, 0],
+      Head: [0.1, 0],
       Hair: [0.05, 0],
-      UpperArm_L: [-0.55, 0.12],
-      UpperArm_R: [-0.55, -0.12],
-      Forearm_L: [-1.15, 0.1],
-      Forearm_R: [-1.15, -0.1],
-      Hand_L: [s * 0.12, 0],
-      Hand_R: [-s * 0.12, 0],
+      UpperArm_L: [-0.6, 0.14],
+      UpperArm_R: [-0.6, -0.14],
+      Forearm_L: [-1.15 + s * 0.14, 0.1],
+      Forearm_R: [-1.15 - s * 0.14, -0.1],
+      Hand_L: [s * 0.24, 0],
+      Hand_R: [-s * 0.24, 0],
     };
   },
 
-  /* 炒菜翻炒（站姿）：右手画圈，左手叉腰 */
+  /* 炒菜翻炒（站姿）：右手画大圈，左手叉腰 */
   stir(t) {
     const a = t * 5;
     return {
       Spine: [0.06, 0.05],
       Chest: [0.04, 0.05],
       Head: [0.1, -0.05],
-      UpperArm_L: [-0.5, 0.45],
+      UpperArm_L: [-0.5, 0.5],
       Forearm_L: [-1.7, 0.2],
-      UpperArm_R: [-0.95 + Math.sin(a) * 0.12, -0.3],
-      Forearm_R: [-0.8 + Math.cos(a) * 0.2, -0.25],
-      Hand_R: [Math.sin(a + 1) * 0.3, 0],
+      UpperArm_R: [-0.95 + Math.sin(a) * 0.22, -0.32],
+      Forearm_R: [-0.85 + Math.cos(a) * 0.34, -0.25],
+      Hand_R: [Math.sin(a + 1) * 0.42, 0],
     };
   },
 
@@ -262,11 +262,22 @@ const POSES = {
 
 /* ------------------------------------------------------------------ */
 /*  动画器                                                             */
+/*                                                                     */
+/*  关键改进（对应「动作要对、切换不突兀」）：                          */
+/*  · 采用「姿态权重交叉淡入」而非「逐骨低通」。每根骨的角度由各「活跃  */
+/*    姿态」按权重线性叠加；周期运动直接按当前时间 t 求值，不再被低通   */
+/*    滤波压扁，所以走路/炒菜等动作的振幅完整保留（对应动作清晰可见）。 */
+/*  · 每个姿态是一个独立权重 w∈[0,1]，用指数阻尼逼近目标 0/1，settle   */
+/*    约 0.6s，状态切换是平滑淡入淡出，从任何姿态切到任何姿态都不会跳变 */
+/*    （不突兀）。坐姿 sit 作为「基底层」与打字等姿态并存叠加。         */
 /* ------------------------------------------------------------------ */
 
 const _qA = new THREE.Quaternion();
 const _qB = new THREE.Quaternion();
 const _qC = new THREE.Quaternion();
+
+const POSE_NAMES = Object.keys(POSES);
+const SMOOTH_BASE = 0.004; // 权重阻尼时基：settle≈ -3/ln(base) ≈ 0.6s
 
 export function createBoneAnimator(root, opts = {}) {
   const bones = {};
@@ -285,20 +296,21 @@ export function createBoneAnimator(root, opts = {}) {
   }
 
   const names = Object.keys(bones);
-  const cur = {};   // 骨名 → [主角度, 次角度]（当前值，阻尼逼近目标）
-  const tgt = {};
-  for (const n of names) { cur[n] = [0, 0]; tgt[n] = [0, 0]; }
+  // 每个姿态的权重；idle 默认满权重（呼吸），其余 0
+  const weights = {};
+  for (const pn of POSE_NAMES) weights[pn] = 0;
+  weights.idle = 1;
 
   const has = (n) => !!bones[n];
   let poseName = 'idle';
   const debug = { poseName: 'idle', boneCount: names.length };
 
-  /* 状态 → 姿态（含坐姿叠加） */
+  /* 状态 → 主姿态名 */
   function resolvePose(ctx) {
     const st = ctx.state || 'idle';
     if (ctx.climbing) return 'climb';
     if (ctx.moving) return 'walk';
-    if (ctx.pose) return ctx.pose; // 显式指定（坐姿等）
+    if (ctx.pose) return ctx.pose; // 显式指定（坐姿/炒菜/倚窗/躺 等）
     switch (st) {
       case 'working': return 'type';
       case 'planning': return 'planning';
@@ -330,35 +342,42 @@ export function createBoneAnimator(root, opts = {}) {
 
   function tick(t, dt, ctx = {}) {
     if (!names.length) return;
-    poseName = resolvePose(ctx);
-    debug.poseName = poseName;
-    const fn = POSES[poseName] || POSES.idle;
-    const pose = fn(t, ctx) || {};
+    const main = resolvePose(ctx);
+    debug.poseName = main;
+    poseName = main;
 
-    // 坐姿基底（若调用方要求坐着，先铺 sit 再叠加当前姿态）
-    const seated = !!ctx.seated;
-    const k = 1 - Math.pow(0.0015, Math.min(dt, 0.1)); // 指数阻尼
+    // 目标权重：主姿态恒为 1；坐着时 sit 作为基底层也置 1（与打字等叠加）
+    const targets = { [main]: 1 };
+    if (ctx.seated) targets.sit = 1;
+
+    const wk = 1 - Math.pow(SMOOTH_BASE, Math.min(dt, 0.1)); // 指数阻尼
+    for (const pn of POSE_NAMES) {
+      const tv = targets[pn] ? 1 : 0;
+      let w = weights[pn] + (tv - weights[pn]) * wk;
+      if (w < 1e-4) w = 0;
+      weights[pn] = w;
+    }
+
+    // 预计算活跃姿态（权重>ε）的角度表，避免每根骨重复求值
+    const active = [];
+    for (const pn of POSE_NAMES) {
+      if (weights[pn] > 1e-3) active.push([weights[pn], POSES[pn](t, ctx)]);
+    }
+
+    // 按权重叠加到每根骨
     for (const n of names) {
-      const p = pose[n];
-      let a = p ? p[0] || 0 : 0;
-      let b = p ? p[1] || 0 : 0;
-      if (seated && !p) {
-        const sp = POSES.sit()[n];
-        if (sp) { a = sp[0] || 0; b = sp[1] || 0; }
+      let a = 0, b = 0;
+      for (const [w, pose] of active) {
+        const pv = pose[n];
+        if (pv) { a += w * (pv[0] || 0); b += w * (pv[1] || 0); }
       }
-      tgt[n][0] = a;
-      tgt[n][1] = b;
-      cur[n][0] += (tgt[n][0] - cur[n][0]) * k;
-      cur[n][1] += (tgt[n][1] - cur[n][1]) * k;
-      compose(bones[n], n, cur[n][0], cur[n][1]);
+      compose(bones[n], n, a, b);
     }
   }
 
   function reset() {
-    for (const n of names) {
-      cur[n][0] = 0; cur[n][1] = 0;
-      bones[n].quaternion.copy(rest.get(bones[n]));
-    }
+    for (const pn of POSE_NAMES) weights[pn] = (pn === 'idle') ? 1 : 0;
+    for (const n of names) bones[n].quaternion.copy(rest.get(bones[n]));
   }
 
   /* 取某根骨的世界坐标（交互定位用，例如手到桌面的距离） */
