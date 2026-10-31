@@ -11,13 +11,14 @@ import { makeToonGradientMap } from './characterTextures.js';
 /*    - embedded baseColorTexture / normalTexture (PNG/JPEG in BIN)     */
 /*    - node hierarchy with TRS (incl. parented pivots / empties)       */
 /*    - skins: SkinnedMesh + Bone 层级 + inverseBindMatrices            */
-/*      （关节由代码直接驱动 bone.rotation，不需要解析 AnimationClip）  */
+/*    - animations: rotation / translation 轨道（仅 LINEAR 插值），      */
+/*      解析为易采样的自定义 clip 结构（walk_relaxed 烘焙走路用）        */
 /*                                                                     */
 /*  Deliberately NOT supported (and unnecessary here):                  */
 /*    - Draco / meshopt / KTX2 compressed assets                        */
 /*    - metallicRoughnessTexture (MeshToonMaterial 不吃金属粗糙度贴图)   */
 /*    - external image URIs (只支持 GLB 内嵌贴图)                        */
-/*    - morph targets / Draco / meshopt / KTX2                          */
+/*    - morph targets / scale 轨道 / CUBICSPLINE·STEP 插值              */
 /*                                                                     */
 /*  Pass `gradientMap` to keep the house's toon look; we rebuild every  */
 /*  material as MeshToonMaterial so the model matches the rest.         */
@@ -273,6 +274,107 @@ async function buildScene(gltf, bin, opts) {
   root.updateMatrixWorld(true);
   bindSkins();
 
+  /* ------------------------------------------------------------------ */
+  /*  运行时权重补丁                                                      */
+  /*  rig 硬规则的盲区：头顶两侧（世界 y > 0.80）的头发/鱼鳍会被肩骨的     */
+  /*  「距离 falloff」抓走部分权重（实测 Shoulder_L 主导顶点最高到 0.947）。*/
+  /*  done/climb 用 Shoulder Z ±1.45 大幅抬肩，这撮头发/鳍会跟手一起被     */
+  /*  拽起来，看起来像头侧被撕走一块。这里把阈值之上的臂类权重归还给       */
+  /*  Head/Hair。阈值 0.80 取在手臂顶点实测最高点 0.78 之上（H=1.136），    */
+  /*  袖口/手部的合理权重不受影响；顶点原本带 Hair 权重则还给 Hair，       */
+  /*  否则还给 Head。                                                     */
+  /*  （真要彻底修应改 tools/rig_xiaoshi.py 的硬规则后重跑 Blender；      */
+  /*   这个补丁是 97MB 模型的零成本运行时兜底。）                          */
+  /* ------------------------------------------------------------------ */
+
+  function patchHeadWeights(geo, boneNames, mesh) {
+    const si = geo.getAttribute('skinIndex');
+    const sw = geo.getAttribute('skinWeight');
+    const pos = geo.getAttribute('position');
+    if (!si || !sw || !pos || !si.itemSize || si.itemSize !== sw.itemSize) return null;
+    const comps = Math.min(4, si.itemSize);
+    const headI = boneNames.indexOf('Head');
+    const hairI = boneNames.indexOf('Hair');
+    if (headI < 0) return null;
+
+    // 归一化整型权重需要频率换算（Float32 原样存储；Uint16 normalized → /65535）
+    const isF32 = sw.array instanceof Float32Array;
+    if (!isF32 && !(sw.array instanceof Uint16Array)) return null;
+    const den = isF32 ? 1 : (sw.normalized ? 1 / 65535 : 1);
+    const enc = isF32 ? 1 : 65535;
+
+    mesh.updateWorldMatrix(true, false);
+    const mtx = mesh.matrixWorld;
+    const p = new THREE.Vector3();
+    let patched = 0, moved = 0;
+    for (let v = 0; v < si.count; v++) {
+      p.fromBufferAttribute(pos, v).applyMatrix4(mtx);
+      if (p.y < 0.80) continue;
+      let armW = 0, hairW = 0;
+      for (let c = 0; c < comps; c++) {
+        const j = si.array[v * si.itemSize + c];
+        const w = sw.array[v * sw.itemSize + c] * den;
+        if (w <= 0) continue;
+        const nm = boneNames[j];
+        if (/^(Shoulder_|UpperArm_|Forearm_|Hand_)/.test(nm)) armW += w;
+        else if (nm === 'Hair') hairW += w;
+      }
+      if (armW < 1e-4) { patched++; continue; }
+      const to = hairW > 1e-4 ? hairI : headI;
+      for (let c = 0; c < comps; c++) {
+        const o = v * si.itemSize + c;
+        const j = si.array[o];
+        if (/^(Shoulder_|UpperArm_|Forearm_|Hand_)/.test(boneNames[j])) si.array[o] = to;
+      }
+      moved++;
+    }
+    si.needsUpdate = true;
+    return { vertexCheckedAbove: patched, verticesRewired: moved };
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  动画轨道：glTF animations → { name, duration, tracks }             */
+  /*  track 按「节点名」索引（烘焙 clip 全是 LINEAR，本解析器建立的       */
+  /*  节点名即 Mixamo 骨骼名，无重名冲突）。rotation 存四元数组件序列，  */
+  /*  translation 存平移分量序列；characterAnim 按时间手动采样（不用     */
+  /*  AnimationMixer，因为它要和程序化姿态按权重混合）。                 */
+  /* ------------------------------------------------------------------ */
+
+  function buildAnimations() {
+    const clips = [];
+    for (const adef of gltf.animations || []) {
+      const tracks = {};
+      let duration = 0;
+      let bad = 0;
+      for (const ch of adef.channels || []) {
+        const target = gltf.nodes[ch.target && ch.target.node];
+        if (!target || !target.name) { bad++; continue; }
+        if (ch.target.path !== 'rotation' && ch.target.path !== 'translation') { bad++; continue; }
+        const smp = adef.samplers[ch.sampler];
+        if (!smp) { bad++; continue; }
+        if (smp.interpolation && smp.interpolation !== 'LINEAR') { bad++; continue; }
+        try {
+          const t = readAccessor(smp.input);   // SCALAR 时间
+          const v = readAccessor(smp.output);  // VEC4 四元数 / VEC3 平移
+          if (t.itemSize !== 1 || (v.itemSize !== 4 && v.itemSize !== 3)) { bad++; continue; }
+          // 归一化四元数（个别导出器数值略有偏差，slerp 前归一最稳妥）
+          if (v.itemSize === 4) {
+            for (let k = 0; k < v.array.length; k += 4) {
+              const l = Math.hypot(v.array[k], v.array[k + 1], v.array[k + 2], v.array[k + 3]) || 1;
+              v.array[k] /= l; v.array[k + 1] /= l; v.array[k + 2] /= l; v.array[k + 3] /= l;
+            }
+          }
+          tracks[target.name] = tracks[target.name] || {};
+          tracks[target.name][ch.target.path] = { times: t.array, values: v.array, size: v.itemSize };
+          duration = Math.max(duration, t.array[t.array.length - 1] || 0);
+        } catch { bad++; continue; }
+      }
+      if (bad) console.warn(`[glb] 动画 ${adef.name || ''}: ${bad} 条不支持的轨道被丢弃（非 LINEAR / scale 等）`);
+      if (duration > 0) clips.push({ name: adef.name || 'clip', duration, tracks });
+    }
+    return clips;
+  }
+
   function bindSkins() {
     for (const { mesh, skin: si } of pendingSkins) {
       const s = (gltf.skins || [])[si];
@@ -280,6 +382,16 @@ async function buildScene(gltf, bin, opts) {
       try {
         const bones = (s.joints || []).map((i) => nodeObjs[i]).filter(Boolean);
         if (!bones.length) throw new Error('skin.joints 全部缺失');
+        const boneNames = (s.joints || []).map((i) =>
+          (gltf.nodes && gltf.nodes[i] && gltf.nodes[i].name) || nodeObjs[i]?.name || '');
+        const fix = patchHeadWeights(mesh.geometry, boneNames, mesh);
+        if (fix && fix.verticesRewired) {
+          console.info(`[glb] 头侧权重补丁：${fix.verticesRewired} 个顶点的臂类权重归还给 Head/Hair`);
+        }
+        if (fix && typeof window !== 'undefined') {
+          // 诊断用：demo.html ?qa=1 覆盖层读取
+          window.__glbPatchInfo = fix;
+        }
         const inv = s.inverseBindMatrices != null ? readAccessor(s.inverseBindMatrices) : null;
         const fromFile = [];
         const fromRest = [];
@@ -331,5 +443,5 @@ async function buildScene(gltf, bin, opts) {
     }
   }
 
-  return { scene: root, nodes };
+  return { scene: root, nodes, animations: buildAnimations() };
 }

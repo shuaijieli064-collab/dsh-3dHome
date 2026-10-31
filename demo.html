@@ -37,15 +37,10 @@
       <canvas id="scene"></canvas>
       <div class="hud">
         <h1>小拾 · 模型化路线演示</h1>
-        <p>Blender 按三视图建模 → 导出 GLB → 解析器加载 → 复用 tick() 动画与换色/表情</p>
+        <p>Mixamo 骨架贴图成品 GLB → 解析器加载 → 烘焙走路 + 程序化姿态混合动画</p>
       </div>
       <div class="bar">
-        <button data-exp="normal" class="active">平静</button>
-        <button data-exp="smile">微笑</button>
-        <button data-exp="surprised">惊讶</button>
-        <button data-exp="closed">闭眼</button>
-        <span class="sep"></span>
-        <button id="spin">自动环绕</button>
+        <button id="spin" class="active">自动环绕</button>
       </div>
       <div class="bar" style="bottom: 74px;">
         <button data-pose="idle" class="active">静止</button>
@@ -56,11 +51,13 @@
         <button data-pose="stir">炒菜</button>
         <button data-pose="lean">倚窗</button>
         <button data-pose="planning">盘算</button>
+        <button data-pose="thinking">思考</button>
         <button data-pose="waiting">举手</button>
         <button data-pose="done">庆祝</button>
+        <button data-pose="error">出错</button>
         <button data-pose="lie">躺</button>
       </div>
-      <div class="note">已接入带骨骼的正式模型 src/scene/assets/xiaoshi_rigged.glb（97MB，首次加载需数秒）。<br />下一排按钮可逐个人物姿态；?model=参数可临时换其它 GLB 对比；?bones=1 显示骨架。</div>
+      <div class="note">已接入 Mixamo 骨架正式模型 src/scene/assets/xiaoshi_rigged.glb（5.4MB + 内置 walk_relaxed 烘焙走路）。走路/爬梯按钮走烘焙+程序化混合动画；?model=参数可临时换其它 GLB 对比；?bones=1 显示骨架。</div>
       <div id="err"></div>
     </div>
 
@@ -79,10 +76,10 @@
       scene.background = new THREE.Color(0xf3e2cb);
 
       const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
-      camera.position.set(2.2, 1.7, 3.0);
+      camera.position.set(2.0, 1.5, 3.0);
 
       const controls = new OrbitControls(camera, canvas);
-      controls.target.set(0, 0.95, 0);
+      controls.target.set(0, 0.78, 0);
       controls.enableDamping = true;
       controls.minDistance = 1.6;
       controls.maxDistance = 8;
@@ -129,6 +126,7 @@
         stir: { state: 'working', pose: 'stir' },
         lean: { pose: 'lean' },
         planning: { state: 'planning' },
+        thinking: { state: 'thinking' },
         waiting: { state: 'waiting_confirm' },
         done: { state: 'done' },
         error: { state: 'error' },
@@ -152,6 +150,7 @@
         .then((root) => {
           root.scale.multiplyScalar(1.6);
           root.position.y = 0.09;
+          root.userData.rebind?.(); // 摆位定稿后固化蒙皮快照
           character = root;
           stage.add(character);
           if (params.get('bones')) {
@@ -172,14 +171,7 @@
           console.error(e);
         });
 
-      // 表情按钮
-      document.querySelectorAll('.bar [data-exp]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          document.querySelectorAll('.bar [data-exp]').forEach((b) => b.classList.remove('active'));
-          btn.classList.add('active');
-          character?.userData.setExpression(btn.dataset.exp);
-        });
-      });
+      // 表情按钮已退役：贴图成品模型的脸画在贴图里，运行时不可换。
       // 姿态按钮
       document.querySelectorAll('.bar [data-pose]').forEach((btn) => {
         btn.addEventListener('click', () => {

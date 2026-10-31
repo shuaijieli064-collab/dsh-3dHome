@@ -86,7 +86,10 @@ export const CAMERA_PRESETS = {
   workshop: { pos: [-3.2, 5.8, 9.4], target: [-4.3, 0.95, 2.3] },
   loft: { pos: [4.6, 9.2, 6.4], target: [-3.7, 3.0, -2.4] },
   // 小拾现在住在屋里，不再站屋外展示台：这里对准它的常驻落脚点（客厅）。
-  character: { pos: [4.9, 2.5, 3.4], target: [4.2, 0.95, -2.15], near: 1.2, far: 26 },
+  // 注视点从脸 (y≈0.95) 下移到胸腹 (y≈0.62) 并取 3/4 侧视角——
+  // chibi 的头占了半身高度，正面平视时四肢全被长发/裙摆挡住，
+  // 只剩脸在动；侧面+低机位才看得到肩带臂的动作。
+  character: { pos: [2.7, 1.7, 0.75], target: [4.2, 0.62, -2.05], near: 0.9, far: 26 },
 };
 
 export const ZONE_LABELS = [
@@ -160,11 +163,14 @@ function wallBox(parent, mat, cx, cy, cz, w, h, d) {
   m.castShadow = true;
   m.receiveShadow = true;
   m.userData.occluder = true;
+  m.userData.noFurn = true; // 房屋壳体，不随家具缩放
   parent.add(m);
   return m;
 }
 
 function buildWindow(parent, { cx, y0, y1, w }, glassMat, outsideMat) {
+  // 窗户是壳体的一部分，标记 noFurn 不随家具缩放
+  const shellStart = parent.children.length;
   const h = y1 - y0;
   const cy = (y0 + y1) / 2;
   const z = -4.5;
@@ -206,6 +212,10 @@ function buildWindow(parent, { cx, y0, y1, w }, glassMat, outsideMat) {
   const sill = box(w + 0.26, 0.06, 0.28, 0xf6ecdc);
   sill.position.set(cx, y0 - 0.06, z + 0.16);
   parent.add(sill);
+
+  for (let i = shellStart; i < parent.children.length; i++) {
+    parent.children[i].userData.noFurn = true;
+  }
 }
 
 function buildWallGeometry(parent, wallMat) {
@@ -259,6 +269,22 @@ export function buildHome(scene, renderer, opts = {}) {
 
   let characterStage = null;
 
+  /**
+   * 登记一个「摆在家具上的小件」（灯、书、餐具、笔记本…）和它的宿主。
+   * 家具统一缩放后，这些小件会在 scale pass 里按宿主重新落位——
+   * 否则宿主缩小后它们会浮空或错位。
+   */
+  const docked = [];
+  function dock(item, host) {
+    docked.push({
+      item,
+      host,
+      at: item.position.clone(), // 小件原始坐标
+      hostAt: host.position.clone(), // 宿主原始坐标
+    });
+    return item;
+  }
+
   const floorTex = makeFloorTexture();
   const wallTex = makeWallTexture();
   const outsideTex = makeOutsideTexture();
@@ -288,15 +314,18 @@ export function buildHome(scene, renderer, opts = {}) {
 
   const plinth = box(13.0, 0.5, 10.0, C.oakDark, { roughness: 0.7 });
   plinth.position.y = -0.27;
+  plinth.userData.noFurn = true;
   group.add(plinth);
 
   const trim = box(12.35, 0.06, 9.35, C.oakLight, { roughness: 0.7 });
   trim.position.y = -0.06;
+  trim.userData.noFurn = true;
   group.add(trim);
 
   const floor = new THREE.Mesh(new THREE.BoxGeometry(HOUSE.width, 0.1, HOUSE.depth), floorMat);
   floor.position.y = -0.05;
   floor.receiveShadow = true;
+  floor.userData.noFurn = true;
   group.add(floor);
 
   /* ---------------- walls + windows ---------------- */
@@ -308,6 +337,8 @@ export function buildHome(scene, renderer, opts = {}) {
 
   const curtains = curtain(2.0, 2.5, 0xd9b79a);
   curtains.position.set((winB.x0 + winB.x1) / 2, 0, -4.32);
+  // 贴墙挂件，壳体不缩
+  curtains.userData.noFurn = true;
   group.add(curtains);
 
   // No ceiling beams: the dollhouse has no roof plane, so "beams" read as
@@ -330,10 +361,12 @@ export function buildHome(scene, renderer, opts = {}) {
   // finish it, and they still clear the loft deck 0.85 m above.
   const shelfPlant = plant('small', 0.52);
   shelfPlant.position.set(-1.72, 1.9, -4.26);
+  dock(shelfPlant, shelf);
   group.add(shelfPlant);
 
   const shelfBooks = bookStack(5, 0.9);
   shelfBooks.position.set(-2.92, 1.9, -4.24);
+  dock(shelfBooks, shelf);
   group.add(shelfBooks);
 
   const studyDesk = desk(1.5, 0.72);
@@ -360,40 +393,55 @@ export function buildHome(scene, renderer, opts = {}) {
   fileCabinet.position.set(-1.15, 0.36, -4.15);
   group.add(fileCabinet);
 
+  let handle0 = null;
+  let handle1 = null;
   for (let i = 0; i < 2; i++) {
     const handle = box(0.2, 0.02, 0.02, C.metal, { metalness: 0.6, roughness: 0.3 });
     handle.position.set(-1.15, 0.54 - i * 0.2, -3.91);
     group.add(handle);
+    if (i === 0) handle0 = handle;
+    else handle1 = handle;
   }
 
   const cabinetPlant = succulent();
   cabinetPlant.position.set(-1.15, 0.72, -4.15);
+  dock(cabinetPlant, fileCabinet);
   group.add(cabinetPlant);
+
+  // 抽屉把手也随柜子一起缩（柜子缩了，把手留在原位会浮空错位）
+  dock(handle0, fileCabinet);
+  dock(handle1, fileCabinet);
 
   // loft platform
   const loft = box(4.8, 0.16, 4.2, C.oak, { roughness: 0.75 });
   loft.position.set(-3.6, HOUSE.loftY - 0.08, -2.4);
   loft.userData.occluder = true;
+  loft.userData.noFurn = true;
   group.add(loft);
 
   for (const z of [-0.42, -2.4]) {
     const post = box(0.12, HOUSE.loftY - 0.1, 0.12, C.oakDark);
     post.position.set(-1.3, (HOUSE.loftY - 0.1) / 2, z);
+    post.userData.noFurn = true;
     group.add(post);
   }
 
   const loftRailSide = railing(3.9, 7);
   loftRailSide.position.set(-1.28, HOUSE.loftY, -2.4);
   loftRailSide.rotation.y = Math.PI / 2;
+  loftRailSide.userData.noFurn = true;
   group.add(loftRailSide);
 
   const loftRailFront = railing(2.9, 5);
   loftRailFront.position.set(-4.42, HOUSE.loftY, -0.4);
+  loftRailFront.userData.noFurn = true;
   group.add(loftRailFront);
 
   const loftLadder = ladder(3.05, 0.5);
   loftLadder.position.set(-1.95, 0, 0.5);
   loftLadder.rotation.x = -0.28;
+  // 壳体：梯子顶端对位靠 nav.js 的 LADDER 常量，一起缩会错位
+  loftLadder.userData.noFurn = true;
   group.add(loftLadder);
 
   const bed = loftBed(1.5, 2.0);
@@ -411,6 +459,7 @@ export function buildHome(scene, renderer, opts = {}) {
   const bedThrow = throwBlanket(0.82, C.sage);
   bedThrow.scale.set(1, 0.58, 1);
   bedThrow.position.set(-4.65, HOUSE.loftY + 0.44, -1.92);
+  dock(bedThrow, bed);
   group.add(bedThrow);
 
   const loftArt = pictureFrame(0.4, 0.5, 4);
@@ -451,6 +500,7 @@ export function buildHome(scene, renderer, opts = {}) {
   const loftLaptop = laptop();
   loftLaptop.position.set(-2.4, HOUSE.loftY + 0.775, -4.08);
   loftLaptop.rotation.y = 0.08;
+  dock(loftLaptop, loftDesk);
   group.add(loftLaptop);
 
   const loftChair = chair();
@@ -470,6 +520,8 @@ export function buildHome(scene, renderer, opts = {}) {
   group.add(loftLamp);
 
   const loftFairy = stringLights([-5.7, 3.5, -4.42], [-1.6, 3.5, -4.42], 14, 0.3);
+  // 贴墙灯串：壳体，不缩
+  loftFairy.userData.noFurn = true;
   group.add(loftFairy);
 
   /* ---------------- living room ---------------- */
@@ -489,6 +541,7 @@ export function buildHome(scene, renderer, opts = {}) {
   // the sofa's rear face now that the couch is turned to the fireplace.
   const couchThrow = throwBlanket(0.62, C.claySoft);
   couchThrow.position.set(4.98, 1.13, -0.95);
+  dock(couchThrow, couch);
   group.add(couchThrow);
 
   const table = coffeeTable(1.5, 0.82);
@@ -541,6 +594,8 @@ export function buildHome(scene, renderer, opts = {}) {
   group.add(livingArt);
 
   const livingFairy = stringLights([1.25, 3.12, -4.02], [5.9, 3.12, -4.02], 12, 0.35);
+  // 贴墙灯串：壳体，不缩
+  livingFairy.userData.noFurn = true;
   group.add(livingFairy);
 
   /* ---------------- workshop ---------------- */
@@ -557,16 +612,19 @@ export function buildHome(scene, renderer, opts = {}) {
   // The bench had no lamp of its own, so the corner went flat at night.
   const benchLamp = tableLamp(0xe8c39a);
   benchLamp.position.set(-5.46, 0.91, 3.5);
+  dock(benchLamp, bench);
   group.add(benchLamp);
 
   // Loose hardware in jars along the wall side of the bench top.
   for (let i = 0; i < 3; i++) {
     const jar = cyl(0.042, 0.04, 0.1, 0xdfd6c4, { roughness: 0.55 });
     jar.position.set(-5.82, 0.96, 2.02 + i * 0.16);
+    dock(jar, bench);
     group.add(jar);
 
     const lid = cyl(0.045, 0.045, 0.018, [C.clay, C.butter, C.sage][i]);
     lid.position.set(-5.82, 1.02, 2.02 + i * 0.16);
+    dock(lid, bench);
     group.add(lid);
   }
 
@@ -652,6 +710,7 @@ export function buildHome(scene, renderer, opts = {}) {
 
   const counterLamp = tableLamp(0xe8c39a);
   counterLamp.position.set(5.6, 0.935, 3.32);
+  dock(counterLamp, sideCounter);
   group.add(counterLamp);
 
   /* ---------------- dining + entry ---------------- */
@@ -683,6 +742,7 @@ export function buildHome(scene, renderer, opts = {}) {
 
   const diningLamp = tableLamp(0xd9b08a, 0xd9a24b);
   diningLamp.position.set(0.55, 0.78, 3.0);
+  dock(diningLamp, dining);
   group.add(diningLamp);
 
   // Three laid places (the fourth seat is where the lamp stands). Kept 22 cm
@@ -695,6 +755,7 @@ export function buildHome(scene, renderer, opts = {}) {
     const ps = placeSetting();
     ps.position.set(px, 0.79, pz);
     ps.rotation.y = rot;
+    dock(ps, dining);
     group.add(ps);
   }
 
@@ -716,6 +777,7 @@ export function buildHome(scene, renderer, opts = {}) {
 
   const entryVase = vaseWithBranches();
   entryVase.position.set(0.45, 0.86, -4.26);
+  dock(entryVase, entryConsole);
   group.add(entryVase);
 
   // Doormat clear of the dining rug (it used to overlap it, at the same
@@ -730,6 +792,56 @@ export function buildHome(scene, renderer, opts = {}) {
   const entryMatPanel = box(1.02, 0.005, 0.38, 0xcbb08c, { roughness: 1 });
   entryMatPanel.position.set(0, 0.0165, 4.19);
   group.add(entryMatPanel);
+
+  /* ---------------- 家具缩放（壳体不动） ---------------- */
+
+  /**
+   * 2026-10-31 用户定案：房子壳体原样，家具统一缩到 0.7 ——
+   * 让 1.10 m 的小拾与家具比例舒服（桌面缩到她的手腕高度），
+   * 走廊相对变宽（她的头球直径 0.66 m），穿行不卡。
+   *
+   * 规则：
+   * 1. 壳体（地板/墙/窗/阁楼楼板/栏杆/立柱/梯子/窗帘/贴墙灯串）标记
+   *    userData.noFurn，跳过缩放；
+   * 2. 直接子节点里所有家具各自乘 FURNITURE_SCALE——家具组以自己的
+   *    脚底（组原点）为缩放中心，落地物缩完仍贴地；
+   * 3. 缩放后把原本贴墙/贴切口的家具重新吸附到那面墙（轴独立判断），
+   *    不留肉眼可见的缝；
+   * 4. dock 登记过的架子上的小件按宿主原坐标相对落位：
+   *    新位置 = 宿主当前位置 + (原始偏移) × FURNITURE_SCALE。
+   */
+  const FURNITURE_SCALE = 0.7;
+
+  group.updateMatrixWorld(true);
+  const preBoxes = new Map();
+  for (const child of group.children) {
+    if (child.userData.noFurn) continue;
+    preBoxes.set(child, new THREE.Box3().setFromObject(child));
+  }
+
+  for (const [child, oldBox] of preBoxes) {
+    // 家具的原点都在脚底/落地处，缩放后仍贴地；整套内部布局一起缩
+    child.scale.multiplyScalar(FURNITURE_SCALE);
+    child.updateWorldMatrix(true, true);
+    const nb = new THREE.Box3().setFromObject(child);
+
+    // 贴墙吸附：四条边界各判一次（后墙 z=-4.5、左墙 x=-6、右切口 x=+6、
+    // 前切口 z=+4.5）。原来是「贴着」的（缝隙 < 0.13 m），缩完后要把
+    // 缩进去的那半重新贴回去。
+    if (Math.abs(oldBox.min.x + 6) < 0.13) child.position.x += oldBox.min.x - nb.min.x;
+    if (Math.abs(oldBox.max.x - 6) < 0.13) child.position.x += oldBox.max.x - nb.max.x;
+    if (Math.abs(oldBox.min.z + 4.5) < 0.13) child.position.z += oldBox.min.z - nb.min.z;
+    if (Math.abs(oldBox.max.z - 4.5) < 0.13) child.position.z += oldBox.max.z - nb.max.z;
+  }
+
+  // 架上小件重新落位（宿主可能刚被贴墙吸附挪过，用宿主**当前**位置）
+  for (const { item, host, at, hostAt } of docked) {
+    item.position.set(
+      host.position.x + (at.x - hostAt.x) * FURNITURE_SCALE,
+      host.position.y + (at.y - hostAt.y) * FURNITURE_SCALE,
+      host.position.z + (at.z - hostAt.z) * FURNITURE_SCALE
+    );
+  }
 
   /* ---------------- lighting ---------------- */
 

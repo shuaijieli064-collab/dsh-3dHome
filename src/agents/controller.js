@@ -64,7 +64,12 @@ export function zoneOf(point, zones) {
 
 const DEFAULTS = {
   scale: 1.0, // 屋里的 Q 版身材；展示台上是 1.6
-  walkSpeed: 1.25, // m/s
+  /** 走路速度标定（2026-10-31 新模型）：烘焙 walk_relaxed 在 1× 播放时
+   *  自然位移速度 = 2 步 × 0.34 模型单位 / 2.467s ≈ 0.30 m/s（全球门
+   *  0.303）。0.9 m/s 时 clip 播放 3×、步频 2.4 步/s，实测观感「动作
+   *  太奇怪」——降到 0.72（clip ≈2.4×，步频 ~1.9 步/s，小短腿从容些）。
+   *  脚不滑步由 gaitPhase 距离锁相保证，与速度无关。 */
+  walkSpeed: 0.72,
   climbSpeed: 0.6,
   home: 'living', // 默认落脚点（客厅）
   idleDwell: [4, 9], // 漫游驻留秒数区间
@@ -104,6 +109,14 @@ export function createResident({ scene, home, zones, palette, opts = {} }) {
     pending: null, // 冷却期挂起的改道请求 {agent,state,ev}，冷却一过兑现
   };
 
+  /**
+   * 步态相位（弧度）：按**实际行进距离**推进，而不是墙上时钟。
+   * 旧版用全局 t 驱动步频，步幅 0.93 m 而小拾腿长只有 ~0.3 m，脚和地面
+   * 不同步，观感就是滑步。现在每走 1 步（走路步长 0.5 m / 爬梯 0.34 m）
+   * 相位推进 2π，脚落点和位移严格锁在一起。
+   */
+  let gaitPhase = 0;
+
   const act = {
     state: 'idle',
     agent: null, // 当前状态归属的 agent 键（同状态换人必须重新寻路）
@@ -123,6 +136,7 @@ export function createResident({ scene, home, zones, palette, opts = {} }) {
     .then((ch) => {
       character = ch;
       character.scale.setScalar(cfg.scale);
+      character.userData.rebind?.(); // 身材倍率定稿后固化蒙皮快照
       scene.add(character);
       ready = true;
       return true;
@@ -389,6 +403,18 @@ export function createResident({ scene, home, zones, palette, opts = {} }) {
     nav.climbing = climbing;
     const speed = climbing ? cfg.climbSpeed : cfg.walkSpeed;
 
+    // 本帧实际前进的距离（封顶到本段剩余长度），按步长推进步态相位。
+    // 步长不再写死：走路 = 动画器实测的烘焙步幅 × 角色 world 缩放
+    // （0.34 模型单位 × 1.1 归一化 × cfg.scale），gaitPhase 每 2π 恰好
+    // 对应烘焙 clip 一个完整周期 → 位移与脚步严格锁死，不滑步。
+    // 爬梯仍是程序化姿态，保留旧步长。
+    const gaitStride = character?.userData?.gait;
+    const stride = climbing
+      ? 0.34
+      : gaitStride?.stride ?? 0.374;
+    const travel = Math.min(dt * speed, segLen * (1 - nav.legT));
+    gaitPhase += (travel / stride) * Math.PI * 2;
+
     nav.legT += (dt * speed) / Math.max(segLen, 1e-3);
     if (nav.legT >= 1) {
       nav.legT = 0;
@@ -416,6 +442,9 @@ export function createResident({ scene, home, zones, palette, opts = {} }) {
       act.dwellUntil = t + 3; // 暂时无路，过会儿再试
     }
   }
+
+  /** 工位动作按房间取材：厨房炒菜、飘窗倚窗，其余工位打字。 */
+  const POSE_BY_ZONE = { app: 'stir', browser: 'lean', file: 'type', computer: 'type', search: 'type', main: 'type' };
 
   function pose(t, dt) {
     if (!character) return;
@@ -445,23 +474,20 @@ export function createResident({ scene, home, zones, palette, opts = {} }) {
     let sy = 1;
 
     if (moving) {
-      const cadence = nav.climbing ? 6 : 8.5;
-      yOff = Math.abs(Math.sin(t * cadence)) * 0.022;
-      roll = Math.sin(t * cadence * 0.5) * 0.035;
-      if (nav.climbing) pitch = -0.12;
+      // 2026-10-31 用户定案：移动时上半身全程冻结（Anim 层已删掉 walk/climb
+      // 的手臂/头通道），根节点也只保留与步态相位同步的垂直弹跳——
+      // roll（歪头）和 pitch（爬梯前倾）都会让头动，全部归零。
+      yOff = Math.abs(Math.sin(gaitPhase)) * 0.022;
     } else {
+      /* 俯身/侧倾/塌腰全部交给骨骼姿态（characterAnim 的 Spine/Head 甜点），
+         根节点只留弹跳/呼吸的微位移——整身 pitch/roll 会把头甩得最远，
+         正是之前「动作全在脸上」的元凶之一。 */
       switch (act.state) {
         case 'working':
           yOff = Math.sin(t * 9) * 0.006;
-          pitch = 0.055;
-          roll = Math.sin(t * 2.1) * 0.012;
           break;
         case 'planning':
-          roll = Math.sin(t * 1.1) * 0.05;
-          pitch = -0.03;
-          break;
         case 'thinking':
-          roll = 0.13 + Math.sin(t * 0.8) * 0.03;
           yOff = Math.sin(t * 1.4) * 0.008;
           break;
         case 'waiting_confirm': {
@@ -490,21 +516,33 @@ export function createResident({ scene, home, zones, palette, opts = {} }) {
         case 'error': {
           act.pulse += dt;
           const settle = Math.min(act.pulse / 0.8, 1);
-          sy = 1 - 0.06 * settle;
-          sx = 1 + 0.03 * settle;
-          pitch = 0.09 * settle;
-          yOff = -0.01 * settle;
+          yOff = -0.012 * settle;
           break;
         }
         default:
           yOff = Math.sin(t * 1.5) * 0.008;
-          roll = Math.sin(t * 0.6) * 0.015;
       }
     }
 
     character.position.set(pos.x, pos.y + yOff, pos.z);
     character.rotation.set(pitch, yaw.current, roll);
     character.scale.set(cfg.scale * sx, cfg.scale * sy, cfg.scale);
+
+    /* ------------------------- 骨骼动画层 ------------------------- */
+    // 房间 → 工作姿态：在工位上站着演（厨房炒菜、飘窗倚窗、其余打字）
+    const zonePose = POSE_BY_ZONE[act.agent] || 'type';
+    const ctx = {
+      state: act.state,
+      moving,
+      climbing: !!nav.climbing,
+      walkSpeed: cfg.walkSpeed,
+      gaitPhase, // 距离驱动的步态相位：脚落点与位移同步（去滑步）
+      seated: false, // 落座后续再做；现阶段工位一律站着演
+      pose: act.state === 'working' && !moving ? (zonePose === 'type' ? null : zonePose) : null,
+    };
+    // animate：眨眼/呆毛/鲸尾等命名部件（无骨骼的刚性版也照常动）
+    character.userData.animate?.(t);
+    character.userData.boneTick?.(t, dt, ctx);
   }
 
   function update(t, dt) {

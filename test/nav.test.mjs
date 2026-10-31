@@ -13,6 +13,7 @@ import {
   FLOOR,
   FLOOR_Y,
   LADDER,
+  LOFT_DECK,
   makeGrid,
   isFreeAt,
   punch,
@@ -69,8 +70,25 @@ console.log('A) 合成障碍');
   const p = nav.plan([-3, 0, 0], [3, 0, 0]);
   ok(!!p, '有门墙可绕');
   if (p) {
-    // 穿门 = 存在某个 x≈0 的拐点且 |z| < 1
-    const throughDoor = p.waypoints.some((w) => Math.abs(w[0]) < 0.6 && Math.abs(w[2]) < 1.0);
+    // 穿门 = 路径经过 x=0 时插值 z 落在门洞内。A* 会把直线段拉直合并，
+    // 所以不能要求"存在一个拐点在门里"（2026-10-31：这条断言之前就
+    // 过严了——恰好直线路径被拉成两端点，路过门时没有拐点）。
+    let throughDoor = false;
+    for (let i = 1; i < p.waypoints.length; i++) {
+      const a = p.waypoints[i - 1], b = p.waypoints[i];
+      if (a[0] === b[0]) {
+        // 垂直段：x 平面在门内，z 区间与门洞 (-1,1) 有重叠即算穿过
+        if (Math.abs(a[0]) < 0.6 && Math.min(a[2], b[2]) < 1 && Math.max(a[2], b[2]) > -1) {
+          throughDoor = true;
+        }
+        continue;
+      }
+      const t = (0 - a[0]) / (b[0] - a[0]);
+      if (t >= 0 && t <= 1 && Math.abs(a[2] + t * (b[2] - a[2])) < 1.0) {
+        throughDoor = true;
+        break;
+      }
+    }
     ok(throughDoor, `路径穿过门洞（拐点 ${JSON.stringify(p.waypoints.map((w) => [+w[0].toFixed(1), +w[2].toFixed(1)]))}）`);
     // 且不能翻到墙外（x 必须单调跨过，z 不越界）
     ok(p.waypoints.every((w) => Math.abs(w[2]) <= 4.4), '没有跑出房间外');
@@ -174,7 +192,16 @@ if (!fs.existsSync(realPath)) {
       `，阁楼 ${st.floors[1].cols}×${st.floors[1].rows}（可走 ${st.floors[1].freeCells}/${st.floors[1].total}）`
   );
   ok(st.floors[0].freeCells > st.floors[0].total * 0.35, '楼下至少 35% 可走（别把屋子堵死）');
-  ok(st.floors[1].freeCells > st.floors[1].total * 0.3, '阁楼至少 30% 可走');
+  // 阁楼的可走上限不是全网格，而是楼板占用区（LOFT_DECK 以外是楼下的天空，
+  // makeGrid 里整片标 SOLID）。分母按楼板格子数算：
+  const loft = st.floors[1];
+  // 直接数：楼板 x∈[-6,-1.2]、z∈[-4.5,-0.3] 在 0.25 栅格里的格子数
+  const deckCells =
+    Math.round((LOFT_DECK.maxX - LOFT_DECK.minX) / 0.25) * Math.round((LOFT_DECK.maxZ - LOFT_DECK.minZ) / 0.25);
+  ok(
+    loft.freeCells > deckCells * 0.3,
+    `阁楼至少 30% 可走（${loft.freeCells}/${deckCells} 楼板格）`
+  );
   console.log(`  punch 清出：${st.punched.length} 处，共 ${st.punched.reduce((n, p) => n + p.cells, 0)} 格`);
 
   // 每个落脚点两两互达
@@ -197,21 +224,28 @@ if (!fs.existsSync(realPath)) {
         if (failures.length < 6) failures.push(`${a.name}→${b.name}`);
         continue;
       }
-      // 路径不得穿家具：每段按 12 步采样，逐点验证可走
+      // 路径不得穿家具：按 0.05m 步长细采样，判定点是否落在障碍盒
+      // **实体内部**（不判 clearance pad——余量保护的是头球，测试只抓
+      // 真穿过去；旧的 1/12 采样约 0.4m 一跳，比格子还稀，加上
+      // isFreeAt 对贴边坐标的四舍五入，会把贴边合法路径误报成穿模）。
       const wps = p.waypoints;
       let bad = false;
       for (let i = 1; i < wps.length && !bad; i++) {
         if (Math.abs(wps[i][1] - wps[i - 1][1]) > 0.5) continue; // 梯子段跳过
-        const g = nav.grids[wps[i][1] === 0 ? 0 : FLOOR_Y[1]];
-        for (let s = 0; s <= 12; s++) {
-          const t = s / 12;
+        const floorY = wps[i][1] === 0 ? 0 : FLOOR.loftY;
+        const segLen = Math.hypot(wps[i][0] - wps[i - 1][0], wps[i][2] - wps[i - 1][2]);
+        const steps = Math.max(1, Math.ceil(segLen / 0.05));
+        for (let s = 0; s <= steps && !bad; s++) {
+          const t = s / steps;
           const x = wps[i - 1][0] + (wps[i][0] - wps[i - 1][0]) * t;
           const z = wps[i - 1][2] + (wps[i][2] - wps[i - 1][2]) * t;
-          if (!isFreeAt(g, x, z)) {
-            bad = true;
-            clipping += 1;
-            if (clips.length < 4) clips.push(`${a.name}→${b.name} @${x.toFixed(1)},${z.toFixed(1)}`);
-            break;
+          for (const box of blockers) {
+            if (blocksFloor(box, floorY) && x > box.minX && x < box.maxX && z > box.minZ && z < box.maxZ) {
+              bad = true;
+              clipping += 1;
+              if (clips.length < 4) clips.push(`${a.name}→${b.name} @${x.toFixed(1)},${z.toFixed(1)}`);
+              break;
+            }
           }
         }
       }

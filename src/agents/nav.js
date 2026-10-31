@@ -135,8 +135,10 @@ export function containingIndices(p, blockers, floorY = p[1], clearance = 0) {
 
 const NAV_DEFAULTS = {
   cell: 0.25, // 格子边长（米）：12×9 的房间 → 48×36 = 1728 格，A* 微秒级
-  clearance: 0.22, // 角色半径余量
-  punchRadius: 0.35, // 落脚点小幅清空的半径（只处理"压在家具边缘"的情况）
+  // 2026-10-31：家具统一缩到 0.7 后走廊相对变宽，余量按小拾实际身形放宽——
+  // 她的头球直径 0.66（半径 0.33），旧值 0.22 会让头蹭到家具。
+  clearance: 0.34, // 角色半径余量
+  punchRadius: 0.45, // 落脚点小幅清空的半径（只处理"压在家具边缘"的情况）
   minOpenCells: 40, // 落脚点所在连通块至少这么大才算开阔（≈2.5 m²）
   attachRings: 12, // 吸附搜索最多外扩几格（3m）
 };
@@ -217,6 +219,7 @@ export function makeGrid(blockers, floorY, opts = {}) {
     blockedCount,
     total: cols * rows,
     cfg,
+    blockers, // 原始障碍盒：punch 的"实体内部不许洗"要用
   };
 }
 
@@ -242,27 +245,51 @@ export function isFreeAt(grid, x, z) {
  * 为什么需要清：房间锚点常压在家具包围盒的边缘上（「书房工位」贴着书桌），
  * 而包围盒是保守估计——桌面以下的空隙都算在盒子里，人站进去合法。
  * 半径刻意很小（一格多），只处理"压边"，不把整件家具洗空。
+ *
+ * 洗开规则（2026-10-31 收紧）：
+ *   - 半径到锚点 ≤ 0.3 m 的核心区：格子里藏在家具实体内部也照洗
+ *     （「站在书桌位」本来就依赖包围盒的保守性）；
+ *   - 0.3 m 以外只敢洗「pad 边缘环」——实体内部深处不许洗。否则相邻两个
+ *     锚点的圆盘会在夹在中间的小件家具（椅子/墩子）内部连通出一条假隧道，
+ *     A* 就真的从家具正中穿过去。
  */
 export function punch(grid, x, z, r) {
   const c0 = gx(grid, x);
   const r0 = gz(grid, z);
-  const span = Math.max(1, Math.ceil(r / grid.cell));
+  const span = Math.max(1, Math.ceil((r + grid.cell) / grid.cell));
+  const raw = grid.blockers || [];
+  const floorY = grid.floorY ?? 0;
+  const CORE = 0.3; // 锚点核心半径：实体内部也允许洗开
   let cleared = 0;
   for (let dr = -span; dr <= span; dr++) {
     for (let dc = -span; dc <= span; dc++) {
-      if (dc * dc + dr * dr > span * span) continue;
       const col = c0 + dc;
       const row = r0 + dr;
       if (col < 0 || row < 0 || col >= grid.cols || row >= grid.rows) continue;
       const i = row * grid.cols + col;
-      if (grid.blocked[i] === SOLID) {
-        grid.blocked[i] = PUNCH;
-        grid.blockedCount -= 1;
-        cleared += 1;
-      }
+      if (grid.blocked[i] !== SOLID) continue;
+      // 用格心到锚点的真实距离判定，而不是格数圆盘——格数盘在对角线上
+      // 能洗到 (span+0.5)×cell，比声明的半径大
+      const px = wx(grid, col);
+      const pz = wz(grid, row);
+      const d = Math.hypot(px - x, pz - z);
+      if (d > r) continue;
+      if (d > CORE && isDeepInterior(raw, floorY, px, pz)) continue;
+      grid.blocked[i] = PUNCH;
+      grid.blockedCount -= 1;
+      cleared += 1;
     }
   }
   return cleared;
+}
+
+/** 点是否深藏在家具实体内部（严格内部，不含贴边）。 */
+function isDeepInterior(raw, floorY, x, z) {
+  for (const b of raw) {
+    if (!blocksFloor(b, floorY)) continue;
+    if (x > b.minX && x < b.maxX && z > b.minZ && z < b.maxZ) return true;
+  }
+  return false;
 }
 
 /**
@@ -606,14 +633,19 @@ export function createNav(blockers, zonePoints = [], opts = {}) {
 
   /** 规划一条从 from[x,y,z] 到 to[x,y,z] 的路线。 */
   function plan(from, to) {
-    const fromY = nearestFloor(from[1]);
+    // 起终点都过一遍落脚点修正：终点解析保证"目标就是开阔处"；起点解析
+    // 修复「起点是原始 zone 坐标、被 openSpot 挪走了」的场景——直接从原始
+    // 坐标规划会以口袋起手（A* 出不来），而agent实际站位早已是修正后的点。
+    const fromAdj = resolvePoint(from);
+    const fromFixed = fromAdj.point;
+    const fromY = nearestFloor(fromFixed[1]);
     const toAdj = resolvePoint(to);
     const toFixed = toAdj.point;
     const toY = nearestFloor(toFixed[1]);
 
     if (fromY === toY) {
       const g = grids[fromY];
-      const raw = aStarGrid(g, [from[0], from[2]], [toFixed[0], toFixed[2]]);
+      const raw = aStarGrid(g, [fromFixed[0], fromFixed[2]], [toFixed[0], toFixed[2]]);
       if (!raw) return null;
       const pts = simplifyPath(g, raw);
       return { waypoints: pts.map(([x, z]) => [x, fromY, z]), climb: null, snapped: toAdj.snapped };
@@ -627,8 +659,8 @@ export function createNav(blockers, zonePoints = [], opts = {}) {
     // 方向决定先走哪层：上 = 楼下走到梯脚，爬上去，阁楼走到终点；
     //               下 = 阁楼走到梯顶，爬下来，楼下走到终点。
     const legA = up
-      ? aStarGrid(low, [from[0], from[2]], [LADDER.foot[0], LADDER.foot[2]])
-      : aStarGrid(high, [from[0], from[2]], [LADDER.top[0], LADDER.top[2]]);
+      ? aStarGrid(low, [fromFixed[0], fromFixed[2]], [LADDER.foot[0], LADDER.foot[2]])
+      : aStarGrid(high, [fromFixed[0], fromFixed[2]], [LADDER.top[0], LADDER.top[2]]);
     const legB = up
       ? aStarGrid(high, [LADDER.top[0], LADDER.top[2]], [toFixed[0], toFixed[2]])
       : aStarGrid(low, [LADDER.foot[0], LADDER.foot[2]], [toFixed[0], toFixed[2]]);

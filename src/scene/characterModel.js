@@ -1,42 +1,30 @@
 import * as THREE from 'three';
 import { loadGLB } from './glbLoader.js';
-import { makeFaceTexture } from './characterTextures.js';
 import { createBoneAnimator } from './characterAnim.js';
 
 /* ================================================================== */
 /*  模型化角色 · 配置区                                                */
 /*                                                                     */
-/*  这条路线用 Blender 按三视图手建的 GLB 替换程序化小人，目标是尽量   */
-/*  100% 还原设定图，同时保留现有 tick() 动画（呼吸/眨眼/鲸尾/呆毛/鳍）*/
-/*  与换色板。改动集中在本文件的配置常量，建模规范见                   */
-/*  src/scene/assets/建模与命名规范.txt。                               */
+/*  2026-10-31 整体替换：新小拾 = Mixamo 骨架贴图成品                   */
+/*  （xiaoshi_rigged.glb，5.4MB，自带 walk_relaxed 烘焙走路）。         */
+/*  单网格单材质，自带画好的脸 → 无表情贴片/眨眼，无可命名部件          */
+/*  （Dress/Ahoge/Tail/Fin 不存在），旧 tick 部件动画整体退役。         */
+/*  动画全部交给 characterAnim.js 的混合动画器（烘焙走路+程序化姿态）。 */
 /* ================================================================== */
 
 /* 模型 URL 是硬性依赖：现在只有模型化这一条路线，程序化小拾已删除。 */
-/* 优先用带骨骼的版本（tools/rig_xiaoshi.py 产出）；它缺失或解析失败时 */
-/* 自动回退到刚性单网格版，功能降级但页面不出错。                     */
+/* 路径沿用旧文件名（直接覆盖），调用方无感知。                       */
 export const CHARACTER_MODEL_URL = './src/scene/assets/xiaoshi_rigged.glb';
-const CHARACTER_MODEL_FALLBACK = './src/scene/assets/xiaoshi.glb';
 
-/* 小拾.glb 的 node_0 自带 Rx(90°)（Blender 导出时已转成 Y-up），实测   */
-/* 包围盒 y:-0.42~0.31 / z:-1.14~0 是几何原始空间；节点转正后身高 1.14。 */
-/* 因此不再额外转正；若换成未转正的导出，把这里改成 Math.PI / 2。       */
+/* 新模型自身就是 Y-up（Mixamo 导出），无需转正。若未来换未转正的导出，*/
+/* 把这里改成 Math.PI / 2。                                            */
 const MODEL_UP_FIX = 0;
-/* 朝向微调（弧度）：若发现背对/侧对相机，改这里。                     */
+/* 朝向微调（弧度）：若发现背对/侧对相机，改这里。Mixamo 导出惯常脸朝   */
+/* +z，预期为 0；demo.html 实测后校准。                                 */
 const MODEL_YAW = 0;
 
-/* 模型归一化目标高度：与程序化小拾一致（脚底 y=0，头顶 ≈1.10）。      */
+/* 模型归一化目标高度：脚底 y=0，头顶 ≈1.10（与旧版一致，屋子尺度不变）。*/
 const MODEL_TARGET_HEIGHT = 1.10;
-
-/* 动画部件对应的节点名（在 Blender 里给对象取这些名字）。             */
-const NODE_NAMES = {
-  head: 'Head',
-  dress: 'Dress',
-  ahoge: 'Ahoge',
-  tail: 'Tail',
-  finL: 'Fin_L',
-  finR: 'Fin_R',
-};
 
 /* 反向壳描边：填节点名（如 ['Head','Hair','Dress']）。要求这些网格的   */
 /* 几何体原点在其自身中心，否则描边会错位。默认关闭，先确认模型再开。   */
@@ -67,25 +55,6 @@ export const DEFAULT_PALETTE = {
 const SKIN = 0xffeadf;
 const LACE = 0xfbf7ef;
 const GOLD = 0xd0a04b;
-
-/* ------------------------------------------------------------------ */
-/*  Face decal — 与程序化版完全相同的 Canvas 表情系统（线稿级质感）。  */
-/*  模型头部需落在 y≈0.78、正面 z≈+0.30 附近，贴图才能对齐。           */
-/* ------------------------------------------------------------------ */
-
-function makeFaceCap(width, height, radius, seg = 30) {
-  const geo = new THREE.PlaneGeometry(width, height, seg, seg);
-  const pos = geo.attributes.position;
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i);
-    const y = pos.getY(i);
-    const z = Math.sqrt(Math.max(radius * radius - x * x - y * y, 0.0004));
-    pos.setZ(i, z);
-  }
-  pos.needsUpdate = true;
-  geo.computeVertexNormals();
-  return geo;
-}
 
 /* ------------------------------------------------------------------ */
 /*  工具                                                               */
@@ -150,6 +119,26 @@ function disposeObject(root) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  蒙皮重绑定                                                          */
+/*  glbLoader 在「刚加载、未归一化」时固化 boneInverses/bindMatrix。     */
+/*  之后 rig 上任何静态变换（归一化缩放/脚底对零/展示台 1.6 倍）都会被   */
+/*  蒙皮叠加两次——实测小人脚悬空 0.56 m、头 1.63 m（2026-10-31）。     */
+/*  three 蒙皮的约定：boneInverses + bindMatrix 必须与静止渲染的世界    */
+/*  快照一致（静止时 skinMatrix=I → 顶点恒等）。所以在**最终静止摆位    */
+/*  定型后**重算一遍即可；之后的运行时动态（走/姿态）走相对变换，安全。 */
+/* ------------------------------------------------------------------ */
+
+export function rebindSkinnedMeshes(root) {
+  root.updateMatrixWorld(true);
+  root.traverse((o) => {
+    if (o.isSkinnedMesh && o.skeleton) {
+      o.skeleton.calculateInverses();
+      o.bind(o.skeleton, o.matrixWorld.clone());
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ */
 /*  构建模型化角色                                                     */
 /* ------------------------------------------------------------------ */
 
@@ -161,127 +150,76 @@ export async function createModeledCharacter(palette = DEFAULT_PALETTE, opts = {
   try {
     loaded = await loadGLB(url);
   } catch (err) {
-    console.warn('[character] 骨骼版加载失败，回退刚性单网格版：', err);
-    loaded = await loadGLB(opts.fallback || CHARACTER_MODEL_FALLBACK);
+    /* 旧的双文件回退（xiaoshi.glb）已删除：加载失败必须暴露，           */
+    /* 上层 loadModelIntoStage 有重试与显式报错。                        */
+    throw err;
   }
-  const { scene: root, nodes } = loaded;
+  const { scene: root, nodes, animations } = loaded;
 
-  // Z-up 转正 + 朝向微调：包一层 holder，归一化/朝向都在 holder 上做。
+  // 朝向与归一化固化到**内层 rig**：住客控制器与展示台会（每帧）覆盖
+  // holder 的 position/scale/rotation——那是「世界摆位」。归一化若放在
+  // holder 上会被覆盖抹掉：新模型 GLB 原点在身体中心（脚 y=-0.5、头
+  // y=+0.5），修正失效后小人半截身子陷进地板（2026-10-31 实测修复）。
   if (MODEL_UP_FIX) root.rotation.x = MODEL_UP_FIX;
+  const rig = new THREE.Group();
+  rig.add(root);
+  rig.rotation.y = MODEL_YAW;
+  normalizeToHeight(rig, MODEL_TARGET_HEIGHT);
   const holder = new THREE.Group();
-  holder.add(root);
-  holder.rotation.y = MODEL_YAW;
-  normalizeToHeight(holder, MODEL_TARGET_HEIGHT);
+  holder.add(rig);
   applyPalette(holder, palette);
 
-  // 表情贴片：仅当模型带 Head 命名节点（按规范建模）时挂载；
-  // 贴图成品模型（如单网格小拾.glb，自带画好的脸）跳过，避免贴错位置。
-  let faceMat = null;
-  // 注意：骨骼版模型里也有名为 Head 的**骨骼**，不能只看名字——
-  // 必须是「带网格的」Head 节点才贴图（贴图成品模型自带画好的脸，跳过）。
-  const headNode = nodes[NODE_NAMES.head];
-  let hasHead = false;
-  if (headNode && !headNode.isBone) {
-    headNode.traverse((o) => {
-      if (o.isMesh) hasHead = true;
-    });
-  }
-  if (hasHead) {
-    faceMat = new THREE.MeshBasicMaterial({
-      map: makeFaceTexture('normal'),
-      transparent: true,
-      depthWrite: false,
-      toneMapped: false,
-    });
-    const face = new THREE.Mesh(makeFaceCap(0.44, 0.34, 0.296), faceMat);
-    face.position.set(0, 0.78, 0);
-    face.renderOrder = 2;
-    holder.add(face);
-  }
+  // rig 定型（归一化已写入）→ 重算蒙皮 bind 快照，静止渲染零变形。
+  // 运行时调用方若再改 holder 摆位（展示台 1.6 倍等），摆完调
+  // holder.userData.rebind() 再固化一次即可。
+  rebindSkinnedMeshes(holder);
+  holder.userData.rebind = () => rebindSkinnedMeshes(holder);
 
-  // 可选描边
+  // 可选描边（新模型为单网格整体贴图，默认关闭；OUTLINE_NODES 需网格节点名）
   for (const name of OUTLINE_NODES) {
     const o = nodes[name];
     if (o) addOutline(o);
   }
 
-  // 记录动画基准姿态，tick 在其基础上叠加，保留作者摆姿
-  const animated = {};
-  for (const key of Object.keys(NODE_NAMES)) {
-    const n = nodes[NODE_NAMES[key]];
-    if (n) animated[key] = { rot: n.rotation.clone(), scaleY: n.scale.y };
-  }
-
-  const blinkState = { next: 2.2, until: 0 };
-  let current = 'normal';
+  /* 表情系统退役：新模型自带画好的脸（单网格贴图），无 Head 网格节点
+     可挂贴片。setExpression 保留为无害空接口，避免调用方炸掉。 */
 
   function setExpression(name = 'normal') {
-    current = name;
-    if (!faceMat) return;
-    blinkState.until = 0;
-    faceMat.map = makeFaceTexture(name);
-    faceMat.needsUpdate = true;
+    /* 无表情贴片：贴图成品模型的脸画在贴图里，运行时不可换。 */
   }
 
-  // 骨骼动画器：模型带骨骼时才有（刚性版自动降级为空）
+  // 混合动画器：烘焙走路 clip + 程序化姿态（新 Mixamo 骨架）
   let animator = null;
   try {
-    animator = createBoneAnimator(root);
+    animator = createBoneAnimator(root, { clips: animations || [] });
     if (!animator.debug.boneCount) animator = null;
   } catch (err) {
     console.warn('[character] 骨骼动画器初始化失败，退回整体动作：', err);
     animator = null;
   }
   if (animator) {
-    console.info(`[character] 骨骼就绪：${animator.debug.boneCount} 根骨`);
+    console.info(
+      `[character] 骨骼就绪：${animator.debug.boneCount} 根骨` +
+      (animator.debug.bakedClip ? `，烘焙走路「${animator.debug.bakedClip}」已挂载` : '')
+    );
   }
 
   function tick(t) {
-    const dress = animated.dress;
-    if (dress) nodes[NODE_NAMES.dress].scale.y = dress.scaleY * (1 + Math.sin(t * 1.6) * 0.012);
-
-    const ahoge = animated.ahoge;
-    if (ahoge) {
-      const n = nodes[NODE_NAMES.ahoge];
-      n.rotation.z = ahoge.rot.z - 0.55 + Math.sin(t * 1.9) * 0.16;
-      n.rotation.x = ahoge.rot.x + 0.15 + Math.cos(t * 1.3) * 0.07;
-    }
-
-    const tail = animated.tail;
-    if (tail) {
-      const n = nodes[NODE_NAMES.tail];
-      n.rotation.z = tail.rot.z + Math.sin(t * 0.9) * 0.06;
-      n.rotation.x = tail.rot.x + Math.sin(t * 0.7) * 0.045;
-    }
-
-    const finL = animated.finL;
-    const finR = animated.finR;
-    if (finL) nodes[NODE_NAMES.finL].rotation.x = finL.rot.x + Math.sin(t * 1.1) * 0.03;
-    if (finR) nodes[NODE_NAMES.finR].rotation.x = finR.rot.x + Math.sin(t * 1.1 + 0.5) * 0.03;
-
-    if (faceMat && current === 'normal') {
-      if (t > blinkState.until && t > blinkState.next) {
-        blinkState.until = t + 0.11;
-        blinkState.next = t + 2.4 + Math.random() * 2.6;
-        faceMat.map = makeFaceTexture('closed');
-        faceMat.needsUpdate = true;
-      } else if (blinkState.until !== 0 && t > blinkState.until) {
-        blinkState.until = 0;
-        faceMat.map = makeFaceTexture(current);
-        faceMat.needsUpdate = true;
-      }
-    }
+    /* 新模型无可命名部件（Dress/Ahoge/Tail/Fin 不存在），也没有表情
+       贴片可眨。整体动作已由 boneTick（混合动画器）掌管，这里保留
+       空实现维持 userData.animate 接口。 */
   }
 
   holder.userData.animate = tick;
   holder.userData.setExpression = setExpression;
   holder.currentExpression = 'normal';
-  setExpression('normal');
   if (animator) {
     holder.userData.bones = animator.bones;
     holder.userData.animator = animator;
     // boneTick 由住客控制器每帧调用（整体位移仍归控制器管）
     holder.userData.boneTick = (t, dt, ctx) => animator.tick(t, dt, ctx);
+    // 步幅标定（世界单位/步）供控制器对齐位移与脚步（不滑步）
+    holder.userData.gait = animator.metrics;
   }
 
   return holder;
@@ -312,6 +250,7 @@ export async function loadModelIntoStage(stage, palette = DEFAULT_PALETTE, opts 
       character.scale.multiplyScalar(scale);
       character.position.y = 0.09;
       stage.add(character);
+      rebindSkinnedMeshes(character); // 台上最终摆位定型后再固化蒙皮快照
       stage.userData.character = character;
       if (old) {
         stage.remove(old);
