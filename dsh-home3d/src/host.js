@@ -28,6 +28,10 @@ const DEFAULT_ROOT = process.env.DSH_HOME3D_ROOT || PROJECT_ROOT;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** 调试开关：DSH_HOME3D_DEBUG=1 打印代理与原始事件，排查用。
+ *  必须是模块级常量——proxy() 和 handler 都要读它，放进函数里会 ReferenceError。 */
+const DEBUG = process.env.DSH_HOME3D_DEBUG === '1';
+
 /* ------------------------------------------------------------------ */
 /*  真实会话 → 小家（节流推送）                                          */
 /* ------------------------------------------------------------------ */
@@ -177,8 +181,6 @@ export function apply(ctx, config = {}) {
       );
       return;
     }
-
-  const DEBUG = process.env.DSH_HOME3D_DEBUG === '1';
 
     const rawUrl = req.url || '/';
     // 宿主可能已经剥掉前缀（也有的保留），两种都兼容：

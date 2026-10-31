@@ -204,7 +204,6 @@
       resize();
 
       let last = performance.now();
-      let liePitch = 0; // 演示用：躺姿整体后仰，让「躺」读得出来
       function loop() {
         const t = clock.getElapsedTime();
         const now = performance.now();
@@ -217,13 +216,8 @@
           const tt = window.__freezeTime != null ? window.__freezeTime : t;
           character.userData.boneTick?.(tt + window.__phase, dt, poseCtx);
           if (window.__freeze) character.userData.animator?.reset();
-          const lying = window.__poseName === 'lie';
-          // 躺姿：整体缓动后仰；其余姿态回正。旋转中心在角色脚底，避免穿台过深。
-          const targetPitch = lying ? -1.25 : 0;
-          liePitch += (targetPitch - liePitch) * (1 - Math.pow(0.02, dt));
-          character.rotation.x = liePitch;
-          if (spin && !lying) character.rotation.y = Math.sin(t * 0.28) * 0.5;
-          else if (!lying) character.rotation.y *= 0.9;
+          if (spin) character.rotation.y = Math.sin(t * 0.28) * 0.5;
+          else character.rotation.y *= 0.9;
         }
         controls.update();
         renderer.render(scene, camera);
